@@ -1,204 +1,618 @@
-"""Draw simple webcam diagnostics; no desktop HUD in Phase 1."""
+
+"""AURA v0.2 - Wide spatial tracking dashboard."""
+
 from __future__ import annotations
 
 import cv2
 import numpy as np
 
-# Index pairs sampled from the standard MediaPipe face mesh: eyes, brows,
-# nose, lips, outer oval. A lightweight subset avoids costly full-mesh drawing.
+
+# Dashboard dimensions
+WIDTH = 1240
+HEIGHT = 720
+
+# OpenCV uses BGR colors
+BG = (22, 17, 12)
+PANEL = (39, 32, 23)
+PANEL_INNER = (48, 40, 29)
+BORDER = (75, 65, 49)
+CYAN = (235, 221, 91)
+WHITE = (240, 240, 240)
+MUTED = (174, 167, 155)
+GREEN = (125, 225, 130)
+RED = (110, 110, 250)
+ORANGE = (80, 175, 255)
+
+FONT = cv2.FONT_HERSHEY_SIMPLEX
+
+
 CONTOURS = [
-    [10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,
-     148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109,10],
-    [33,160,158,133,153,144,33],
-    [362,385,387,263,373,380,362],
-    [61,40,37,0,267,270,291,321,314,17,84,91,61],
-    [168,6,197,195,5,4,1,2,98],
+    [10, 338, 297, 332, 284, 251, 389, 356,
+     454, 323, 361, 288, 397, 365, 379, 378,
+     400, 377, 152, 148, 176, 149, 150, 136,
+     172, 58, 132, 93, 234, 127, 162, 21,
+     54, 103, 67, 109, 10],
+
+    [33, 160, 158, 133, 153, 144, 33],
+    [362, 385, 387, 263, 373, 380, 362],
+    [61, 40, 37, 0, 267, 270, 291,
+     321, 314, 17, 84, 91, 61],
+    [168, 6, 197, 195, 5, 4, 1, 2, 98],
 ]
 
 
-def draw_mesh(frame: np.ndarray, landmarks) -> None:
-    height, width = frame.shape[:2]
-    # Sparse points + wire contours are easier to see than every triangulation.
+def text(
+    img,
+    value,
+    x,
+    y,
+    size=0.52,
+    color=WHITE,
+    thickness=1,
+):
+    cv2.putText(
+        img,
+        str(value),
+        (int(x), int(y)),
+        FONT,
+        size,
+        color,
+        thickness,
+        cv2.LINE_AA,
+    )
+
+
+def rect(img, x1, y1, x2, y2, color=PANEL):
+    cv2.rectangle(
+        img,
+        (int(x1), int(y1)),
+        (int(x2), int(y2)),
+        color,
+        -1,
+    )
+
+
+def outline(img, x1, y1, x2, y2, color=BORDER):
+    cv2.rectangle(
+        img,
+        (int(x1), int(y1)),
+        (int(x2), int(y2)),
+        color,
+        1,
+        cv2.LINE_AA,
+    )
+
+
+def clamp(value, minimum=-1.0, maximum=1.0):
+    return max(minimum, min(maximum, float(value)))
+
+
+def draw_mesh(frame, landmarks):
+    h, w = frame.shape[:2]
+
     for contour in CONTOURS:
         points = []
+
         for idx in contour:
-            if idx >= len(landmarks):
-                continue
-            lm = landmarks[idx]
-            points.append((int(lm.x * width), int(lm.y * height)))
+            if idx < len(landmarks):
+                lm = landmarks[idx]
+                points.append(
+                    (int(lm.x * w), int(lm.y * h))
+                )
+
         if len(points) > 1:
-            cv2.polylines(frame, [np.array(points, dtype=np.int32)], False, (255, 225, 75), 1, cv2.LINE_AA)
+            cv2.polylines(
+                frame,
+                [np.array(points, dtype=np.int32)],
+                False,
+                CYAN,
+                1,
+                cv2.LINE_AA,
+            )
+
     for idx in range(0, min(len(landmarks), 468), 5):
         lm = landmarks[idx]
-        x, y = int(lm.x * width), int(lm.y * height)
-        if 0 <= x < width and 0 <= y < height:
-            cv2.circle(frame, (x, y), 1, (80, 220, 255), -1, cv2.LINE_AA)
+        x = int(lm.x * w)
+        y = int(lm.y * h)
+
+        if 0 <= x < w and 0 <= y < h:
+            cv2.circle(
+                frame,
+                (x, y),
+                1,
+                ORANGE,
+                -1,
+                cv2.LINE_AA,
+            )
 
 
-def _clamp(value: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, value))
+def draw_card(canvas, x1, y1, x2, y2, title):
+    rect(canvas, x1, y1, x2, y2, PANEL)
+    outline(canvas, x1, y1, x2, y2)
+
+    text(
+        canvas, title, x1 + 16, y1 + 27,
+        0.53, CYAN, 1
+    )
 
 
-def _blend_panel(frame: np.ndarray, x1: int, y1: int, x2: int, y2: int,
-                 color=(15, 24, 34), alpha: float = 0.78) -> None:
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
-    cv2.addWeighted(overlay, alpha, frame, 1.0 - alpha, 0, frame)
+def draw_position_map(canvas, position):
+    """Large X/Y positional map."""
 
+    x1, y1 = 850, 78
+    x2, y2 = 1216, 366
 
-def draw_axes_widget(frame: np.ndarray, pose: np.ndarray | None, enabled: bool = True) -> None:
-    if not enabled:
+    draw_card(
+        canvas, x1, y1, x2, y2,
+        "POSITION / X-Y"
+    )
+
+    # Plot area
+    px1, py1 = 915, 127
+    px2, py2 = 1148, 333
+
+    rect(
+        canvas, px1, py1, px2, py2,
+        PANEL_INNER
+    )
+    outline(canvas, px1, py1, px2, py2)
+
+    cx = (px1 + px2) // 2
+    cy = (py1 + py2) // 2
+
+    # Grid lines
+    for fraction in (0.25, 0.5, 0.75):
+        gx = int(px1 + (px2 - px1) * fraction)
+        gy = int(py1 + (py2 - py1) * fraction)
+
+        cv2.line(
+            canvas,
+            (gx, py1),
+            (gx, py2),
+            BORDER,
+            1,
+            cv2.LINE_AA,
+        )
+
+        cv2.line(
+            canvas,
+            (px1, gy),
+            (px2, gy),
+            BORDER,
+            1,
+            cv2.LINE_AA,
+        )
+
+    text(canvas, "UP", cx - 12, py1 - 9, 0.38, MUTED)
+    text(canvas, "DOWN", cx - 20, py2 + 19, 0.38, MUTED)
+    text(canvas, "LEFT", px1 - 47, cy + 5, 0.38, MUTED)
+    text(canvas, "RIGHT", px2 + 5, cy + 5, 0.38, MUTED)
+
+    cv2.circle(canvas, (cx, cy), 4, MUTED, -1)
+
+    if position is None:
+        text(
+            canvas,
+            "NO POSITION",
+            px1 + 54,
+            py1 + 105,
+            0.5,
+            RED,
+        )
         return
 
-    h, w = frame.shape[:2]
-    cyan = (240, 216, 74)
-    white = (238, 238, 238)
-    muted = (165, 176, 188)
+    x, y, z = position
 
-    panel_w = 228
-    panel_h = 274
-    x1 = max(8, w - panel_w - 8)
-    y1 = 8
-    x2 = w - 8
-    y2 = min(h - 8, y1 + panel_h)
+    # Sensitivity: +/- 20% of image width/height
+    x_norm = clamp(x / 20.0)
+    y_norm = clamp(y / 20.0)
 
-    _blend_panel(frame, x1, y1, x2, y2)
+    radius_x = (px2 - px1) // 2 - 12
+    radius_y = (py2 - py1) // 2 - 12
 
-    cv2.putText(frame, "HEAD AXES", (x1 + 12, y1 + 22), cv2.FONT_HERSHEY_SIMPLEX,
-                0.58, cyan, 1, cv2.LINE_AA)
+    dot_x = int(cx + x_norm * radius_x)
+    dot_y = int(cy - y_norm * radius_y)
 
-    # -----------------------------
-    # YAW / PITCH XY plane
-    # -----------------------------
-    plane_size = 148
-    plane_x = x1 + 20
-    plane_y = y1 + 38
-    plane_x2 = plane_x + plane_size
-    plane_y2 = plane_y + plane_size
-    cx = plane_x + plane_size // 2
-    cy = plane_y + plane_size // 2
-    margin = 12
+    strength = min(
+        1.0,
+        float(np.hypot(x_norm, y_norm))
+    )
 
-    cv2.rectangle(frame, (plane_x, plane_y), (plane_x2, plane_y2), (80, 95, 110), 1)
-    cv2.line(frame, (cx, plane_y + 4), (cx, plane_y2 - 4), muted, 1, cv2.LINE_AA)
-    cv2.line(frame, (plane_x + 4, cy), (plane_x2 - 4, cy), muted, 1, cv2.LINE_AA)
+    thickness = 2 + int(strength * 5)
+    dot_radius = 7 + int(strength * 5)
 
-    # Tick marks
-    for frac in (0.25, 0.5, 0.75):
-        tx = int(plane_x + frac * plane_size)
-        ty = int(plane_y + frac * plane_size)
-        cv2.line(frame, (tx, cy - 4), (tx, cy + 4), (95, 105, 118), 1, cv2.LINE_AA)
-        cv2.line(frame, (cx - 4, ty), (cx + 4, ty), (95, 105, 118), 1, cv2.LINE_AA)
+    color = CYAN if strength < 0.7 else ORANGE
 
-    cv2.putText(frame, "YAW", (plane_x + plane_size + 12, cy + 4), cv2.FONT_HERSHEY_SIMPLEX,
-                0.45, white, 1, cv2.LINE_AA)
-    cv2.putText(frame, "PITCH", (cx - 20, plane_y - 8), cv2.FONT_HERSHEY_SIMPLEX,
-                0.45, white, 1, cv2.LINE_AA)
-    cv2.putText(frame, "L", (plane_x - 12, cy + 4), cv2.FONT_HERSHEY_SIMPLEX,
-                0.42, muted, 1, cv2.LINE_AA)
-    cv2.putText(frame, "R", (plane_x2 + 2, cy + 4), cv2.FONT_HERSHEY_SIMPLEX,
-                0.42, muted, 1, cv2.LINE_AA)
-    cv2.putText(frame, "U", (cx - 5, plane_y - 8), cv2.FONT_HERSHEY_SIMPLEX,
-                0.42, muted, 1, cv2.LINE_AA)
-    cv2.putText(frame, "D", (cx - 5, plane_y2 + 16), cv2.FONT_HERSHEY_SIMPLEX,
-                0.42, muted, 1, cv2.LINE_AA)
+    cv2.line(
+        canvas,
+        (cx, cy),
+        (dot_x, dot_y),
+        color,
+        thickness,
+        cv2.LINE_AA,
+    )
 
-    if pose is not None:
-        yaw, pitch, roll = [float(v) for v in pose]
+    cv2.circle(
+        canvas,
+        (dot_x, dot_y),
+        dot_radius + 5,
+        color,
+        1,
+        cv2.LINE_AA,
+    )
 
-        # These control sensitivity / range of movement inside the widget
-        max_yaw = 35.0
-        max_pitch = 25.0
+    cv2.circle(
+        canvas,
+        (dot_x, dot_y),
+        dot_radius,
+        color,
+        -1,
+        cv2.LINE_AA,
+    )
 
-        yaw_norm = _clamp(yaw / max_yaw, -1.0, 1.0)
-        pitch_norm = _clamp(pitch / max_pitch, -1.0, 1.0)
+    text(
+        canvas, f"X {x:+.1f}%",
+        x1 + 15, y2 - 12, 0.46, WHITE
+    )
+    text(
+        canvas, f"Y {y:+.1f}%",
+        x1 + 160, y2 - 12, 0.46, WHITE
+    )
 
-        px = int(cx + yaw_norm * (plane_size / 2 - margin))
-        py = int(cy - pitch_norm * (plane_size / 2 - margin))
 
-        magnitude = min(1.0, (abs(yaw_norm) + abs(pitch_norm)) / 1.6)
-        thickness = 2 + int(4 * magnitude)
-        radius = 6 + int(4 * magnitude)
+def draw_depth_gauge(canvas, position):
+    """Relative forward/backward movement gauge."""
 
-        # Cyan -> warmer as motion grows
-        color = (40, 255 - int(120 * magnitude), 255)
+    x1, y1 = 850, 380
+    x2, y2 = 1216, 478
 
-        cv2.line(frame, (cx, cy), (px, py), color, thickness, cv2.LINE_AA)
-        cv2.circle(frame, (px, py), radius, color, -1, cv2.LINE_AA)
-        cv2.circle(frame, (cx, cy), 4, cyan, -1, cv2.LINE_AA)
+    draw_card(
+        canvas, x1, y1, x2, y2,
+        "DEPTH / Z"
+    )
 
-        # -----------------------------
-        # ROLL / TILT gauge
-        # -----------------------------
-        bar_x1 = x1 + 20
-        bar_x2 = x2 - 20
-        bar_y = y1 + 220
-        bar_cx = (bar_x1 + bar_x2) // 2
+    center = 1033
+    bar_start = 880
+    bar_end = 1187
+    bar_y = 437
 
-        max_roll = 35.0
-        roll_norm = _clamp(roll / max_roll, -1.0, 1.0)
-        roll_x = int(bar_cx + roll_norm * ((bar_x2 - bar_x1) / 2 - 12))
+    cv2.line(
+        canvas,
+        (bar_start, bar_y),
+        (bar_end, bar_y),
+        BORDER,
+        8,
+        cv2.LINE_AA,
+    )
 
-        roll_mag = abs(roll_norm)
-        roll_thickness = 2 + int(4 * roll_mag)
-        roll_color = (60, 255 - int(120 * roll_mag), 255)
+    cv2.line(
+        canvas,
+        (center, bar_y - 15),
+        (center, bar_y + 15),
+        WHITE,
+        1,
+        cv2.LINE_AA,
+    )
 
-        cv2.putText(frame, "ROLL / TILT", (bar_x1, bar_y - 16), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.46, white, 1, cv2.LINE_AA)
-        cv2.line(frame, (bar_x1, bar_y), (bar_x2, bar_y), muted, 1, cv2.LINE_AA)
-        cv2.line(frame, (bar_cx, bar_y - 8), (bar_cx, bar_y + 8), cyan, 1, cv2.LINE_AA)
-        cv2.line(frame, (bar_cx, bar_y), (roll_x, bar_y), roll_color, roll_thickness, cv2.LINE_AA)
-        cv2.circle(frame, (roll_x, bar_y), 7, roll_color, -1, cv2.LINE_AA)
-        cv2.putText(frame, f"{roll:+.1f} deg", (bar_x1, bar_y + 24), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.45, cyan, 1, cv2.LINE_AA)
+    if position is None:
+        text(
+            canvas, "NO DEPTH DATA",
+            884, 420, 0.45, MUTED
+        )
+        return
+
+    z = float(position[2])
+
+    # +/- 40% of calibrated apparent face size
+    normalized = clamp(z / 40.0)
+
+    target = int(
+        center + normalized * 140
+    )
+
+    color = CYAN if z >= 0 else ORANGE
+
+    cv2.line(
+        canvas,
+        (center, bar_y),
+        (target, bar_y),
+        color,
+        7,
+        cv2.LINE_AA,
+    )
+
+    cv2.circle(
+        canvas,
+        (target, bar_y),
+        9,
+        color,
+        -1,
+        cv2.LINE_AA,
+    )
+
+    direction = (
+        "CLOSER" if z > 2
+        else "FARTHER" if z < -2
+        else "NEUTRAL"
+    )
+
+    text(
+        canvas,
+        f"{z:+.1f}%  {direction}",
+        1030, 413, 0.48, WHITE
+    )
+
+    text(
+        canvas, "FAR",
+        880, 468, 0.35, MUTED
+    )
+    text(
+        canvas, "NEAR",
+        1152, 468, 0.35, MUTED
+    )
+
+
+def draw_rotation_gauges(canvas, rotation):
+    """Yaw, pitch, roll bars."""
+
+    x1, y1 = 850, 491
+    x2, y2 = 1216, 664
+
+    draw_card(
+        canvas, x1, y1, x2, y2,
+        "ORIENTATION / ROTATION"
+    )
+
+    labels = ("YAW", "PITCH", "ROLL")
+    max_angles = (40.0, 30.0, 40.0)
+    ys = (545, 594, 643)
+
+    for index, (label, limit, y) in enumerate(
+        zip(labels, max_angles, ys)
+    ):
+        value = (
+            float(rotation[index])
+            if rotation is not None
+            else 0.0
+        )
+
+        text(
+            canvas,
+            label,
+            868,
+            y - 7,
+            0.46,
+            MUTED,
+        )
+
+        bar_left = 957
+        bar_right = 1160
+        bar_center = (bar_left + bar_right) // 2
+
+        cv2.line(
+            canvas,
+            (bar_left, y),
+            (bar_right, y),
+            BORDER,
+            5,
+            cv2.LINE_AA,
+        )
+
+        cv2.line(
+            canvas,
+            (bar_center, y - 9),
+            (bar_center, y + 9),
+            WHITE,
+            1,
+            cv2.LINE_AA,
+        )
+
+        if rotation is not None:
+            normalized = clamp(value / limit)
+
+            target = int(
+                bar_center + normalized * 94
+            )
+
+            cv2.line(
+                canvas,
+                (bar_center, y),
+                (target, y),
+                CYAN,
+                5,
+                cv2.LINE_AA,
+            )
+
+            cv2.circle(
+                canvas,
+                (target, y),
+                6,
+                CYAN,
+                -1,
+                cv2.LINE_AA,
+            )
+
+        display = (
+            f"{value:+.1f}"
+            if rotation is not None
+            else "--"
+        )
+
+        text(
+            canvas,
+            display,
+            1168,
+            y + 5,
+            0.42,
+            WHITE,
+        )
+
+
+def draw_dashboard(
+    frame,
+    rotation,
+    position,
+    fps,
+    detected,
+    show_mesh,
+    show_gauges,
+    smoothing,
+):
+    canvas = np.full(
+        (HEIGHT, WIDTH, 3),
+        BG,
+        dtype=np.uint8,
+    )
+
+    # Header
+    text(
+        canvas,
+        "AURA / SPATIAL TRACKING",
+        25, 39, 0.82, CYAN, 2
+    )
+
+    status = (
+        "TRACKING ACTIVE"
+        if detected
+        else "SEARCHING FOR FACE"
+    )
+
+    status_color = GREEN if detected else RED
+
+    cv2.circle(
+        canvas,
+        (1020, 32),
+        6,
+        status_color,
+        -1,
+        cv2.LINE_AA,
+    )
+
+    text(
+        canvas,
+        status,
+        1035, 38,
+        0.48,
+        status_color,
+    )
+
+    # Camera panel
+    draw_card(
+        canvas,
+        20, 78, 831, 664,
+        "LIVE CAMERA / FACE TRACKING"
+    )
+
+    # Fit webcam without stretching
+    camera_left = 34
+    camera_top = 120
+    camera_width = 782
+    camera_height = 523
+
+    fh, fw = frame.shape[:2]
+
+    scale = min(
+        camera_width / fw,
+        camera_height / fh
+    )
+
+    new_width = max(1, int(fw * scale))
+    new_height = max(1, int(fh * scale))
+
+    resized = cv2.resize(
+        frame,
+        (new_width, new_height),
+        interpolation=cv2.INTER_LINEAR,
+    )
+
+    offset_x = camera_left + (
+        camera_width - new_width
+    ) // 2
+
+    offset_y = camera_top + (
+        camera_height - new_height
+    ) // 2
+
+    canvas[
+        offset_y:offset_y + new_height,
+        offset_x:offset_x + new_width
+    ] = resized
+
+    # Camera footer label
+    text(
+        canvas,
+        f"CAM 01  |  {fw}x{fh}",
+        35, 657, 0.43, MUTED
+    )
+
+    text(
+        canvas,
+        f"{fps:.1f} FPS",
+        715, 657, 0.48, CYAN
+    )
+
+    if show_gauges:
+        draw_position_map(canvas, position)
+        draw_depth_gauge(canvas, position)
+        draw_rotation_gauges(canvas, rotation)
+
     else:
-        cv2.circle(frame, (cx, cy), 4, cyan, -1, cv2.LINE_AA)
+        draw_card(
+            canvas,
+            850, 78, 1216, 664,
+            "GAUGES HIDDEN"
+        )
 
-        bar_x1 = x1 + 20
-        bar_x2 = x2 - 20
-        bar_y = y1 + 220
-        bar_cx = (bar_x1 + bar_x2) // 2
+        text(
+            canvas,
+            "Press G to show tracking gauges",
+            875, 160, 0.49, MUTED
+        )
 
-        cv2.putText(frame, "ROLL / TILT", (bar_x1, bar_y - 16), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.46, white, 1, cv2.LINE_AA)
-        cv2.line(frame, (bar_x1, bar_y), (bar_x2, bar_y), muted, 1, cv2.LINE_AA)
-        cv2.line(frame, (bar_cx, bar_y - 8), (bar_cx, bar_y + 8), cyan, 1, cv2.LINE_AA)
-        cv2.putText(frame, "--", (bar_x1, bar_y + 24), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.45, muted, 1, cv2.LINE_AA)
+    # Bottom controls
+    cv2.line(
+        canvas,
+        (20, 683),
+        (1216, 683),
+        BORDER,
+        1,
+        cv2.LINE_AA,
+    )
 
+    text(
+        canvas,
+        "C / SPACE  CALIBRATE",
+        25, 705, 0.43, WHITE
+    )
 
-def draw_panel(frame: np.ndarray, pose: np.ndarray | None, fps: float,
-               detected: bool, show_mesh: bool, show_axes: bool, smoothing: float) -> None:
-    height, width = frame.shape[:2]
-    panel_width = min(width - 16, 382)
-    panel_height = 188
+    text(
+        canvas,
+        f"M  MESH {'ON' if show_mesh else 'OFF'}",
+        265, 705, 0.43, MUTED
+    )
 
-    _blend_panel(frame, 8, 8, panel_width, panel_height)
+    text(
+        canvas,
+        f"G  GAUGES {'ON' if show_gauges else 'OFF'}",
+        430, 705, 0.43, MUTED
+    )
 
-    cyan = (240, 216, 74)  # BGR
-    white = (238, 238, 238)
-    muted = (175, 186, 195)
-    status_color = (100, 220, 100) if detected else (80, 90, 255)
+    text(
+        canvas,
+        "R  RESET",
+        675, 705, 0.43, MUTED
+    )
 
-    def line(text: str, y: int, color=white, scale=0.53) -> None:
-        cv2.putText(frame, text, (18, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
+    text(
+        canvas,
+        "Q / ESC  QUIT",
+        810, 705, 0.43, MUTED
+    )
 
-    line("AURA / PHASE 1", 29, cyan, 0.62)
-    line("FACE FOUND" if detected else "NO FACE DETECTED", 52, status_color)
+    text(
+        canvas,
+        f"EMA {smoothing:.2f}",
+        1100, 705, 0.43, CYAN
+    )
 
-    if pose is not None:
-        yaw, pitch, roll = pose
-        line(f"YAW:   {yaw:+7.1f} deg", 78)
-        line(f"PITCH: {pitch:+7.1f} deg", 99)
-        line(f"ROLL:  {roll:+7.1f} deg", 120)
-    else:
-        line("YAW:     --", 78, muted)
-        line("PITCH:   --", 99, muted)
-        line("ROLL:    --", 120, muted)
-
-    line(f"FPS: {fps:5.1f}   Smoothing: {smoothing:.2f}", 143, cyan, 0.48)
-    line(f"C/SPACE: Calibrate   M: Mesh {'ON' if show_mesh else 'OFF'}", 163, muted, 0.40)
-    line(f"G: Axes {'ON' if show_axes else 'OFF'}   R: Reset", 180, muted, 0.40)
-
-    cv2.putText(frame, "Q/ESC: Quit", (12, height - 12),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.47, white, 1, cv2.LINE_AA)
+    return canvas
