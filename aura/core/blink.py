@@ -1,7 +1,10 @@
+"""Independent per-eye blink / wink detection from MediaPipe Face Mesh."""
+
+from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 import math
+import time
 
 
 @dataclass
@@ -11,6 +14,8 @@ class BlinkResult:
     right_closed: bool = False
     left_ear: float = 0.0
     right_ear: float = 0.0
+    left_openness: float = 1.0
+    right_openness: float = 1.0
     detected: bool = False
 
 
@@ -30,13 +35,26 @@ class BlinkDetector:
 
     def __init__(
         self,
-        close_ratio=0.72,
-        open_ratio=0.84,
-        min_closed_frames=2,
+        close_ratio=0.82,
+        open_ratio=0.90,
+        wink_partner_ratio=0.88,
+        min_closed_frames=1,
+        reopen_frames=1,
+        sync_window_s=0.16,
+        settle_s=0.05,
+        cooldown_s=0.22,
+        baseline_min=0.12,
     ):
+        # Tunable thresholds (ratios relative to each eye's baseline EAR).
         self.close_ratio = close_ratio
         self.open_ratio = open_ratio
+        self.wink_partner_ratio = wink_partner_ratio
         self.min_closed_frames = min_closed_frames
+        self.reopen_frames = reopen_frames
+        self.sync_window_s = sync_window_s
+        self.settle_s = settle_s
+        self.cooldown_s = cooldown_s
+        self.baseline_min = baseline_min
 
         self.baseline_left = None
         self.baseline_right = None
@@ -45,30 +63,42 @@ class BlinkDetector:
 
         self.left_closed = False
         self.right_closed = False
-
         self.left_frames = 0
         self.right_frames = 0
+        self.left_open_frames = 0
+        self.right_open_frames = 0
 
-        self.in_blink = False
+        self.episode_active = False
         self.episode_left = False
         self.episode_right = False
-        self.open_frames = 0
+        self.episode_left_closed_at = None
+        self.episode_right_closed_at = None
+        self.episode_left_min_openness = 1.0
+        self.episode_right_min_openness = 1.0
+        self.both_open_since = None
+
+        self.cooldown_until = 0.0
 
     @staticmethod
     def _distance(a, b):
         return math.hypot(a.x - b.x, a.y - b.y)
 
     def _ear(self, landmarks, indices):
-        p = [landmarks[i] for i in indices]
+        points = [landmarks[i] for i in indices]
 
-        vertical_1 = self._distance(p[1], p[5])
-        vertical_2 = self._distance(p[2], p[4])
-        horizontal = self._distance(p[0], p[3])
+        vertical_1 = self._distance(points[1], points[5])
+        vertical_2 = self._distance(points[2], points[4])
+        horizontal = self._distance(points[0], points[3])
 
         if horizontal < 1e-6:
             return 0.0
 
         return (vertical_1 + vertical_2) / (2.0 * horizontal)
+
+    def _openness(self, ear, baseline):
+        if baseline is None or baseline < 1e-6:
+            return 1.0
+        return max(0.0, min(1.25, ear / baseline))
 
     def reset(self):
         self.baseline_left = None
@@ -76,108 +106,194 @@ class BlinkDetector:
 
         self.left_closed = False
         self.right_closed = False
-
         self.left_frames = 0
         self.right_frames = 0
+        self.left_open_frames = 0
+        self.right_open_frames = 0
 
-        self.in_blink = False
-        self.episode_left = False
-        self.episode_right = False
-        self.open_frames = 0
-
+        self._clear_episode()
+        self.cooldown_until = 0.0
         self.latest = "None"
 
     def face_lost(self):
         # Keep the latest blink, but discard an incomplete event.
-        self.in_blink = False
-        self.episode_left = False
-        self.episode_right = False
         self.left_closed = False
         self.right_closed = False
         self.left_frames = 0
         self.right_frames = 0
-        self.open_frames = 0
+        self.left_open_frames = 0
+        self.right_open_frames = 0
+        self._clear_episode()
 
-    def _update_eye(self, ear, baseline, closed, frames):
+    def _clear_episode(self):
+        self.episode_active = False
+        self.episode_left = False
+        self.episode_right = False
+        self.episode_left_closed_at = None
+        self.episode_right_closed_at = None
+        self.episode_left_min_openness = 1.0
+        self.episode_right_min_openness = 1.0
+        self.both_open_since = None
+
+    def _update_eye(self, ear, baseline, closed, close_frames, open_frames):
         close_threshold = baseline * self.close_ratio
         open_threshold = baseline * self.open_ratio
 
         if closed:
             if ear >= open_threshold:
-                closed = False
-                frames = 0
+                open_frames += 1
+                if open_frames >= self.reopen_frames:
+                    closed = False
+                    close_frames = 0
+                    open_frames = 0
+            else:
+                open_frames = 0
         else:
             if ear < close_threshold:
-                frames += 1
-                if frames >= self.min_closed_frames:
+                close_frames += 1
+                if close_frames >= self.min_closed_frames:
                     closed = True
+                    open_frames = 0
             else:
-                frames = 0
+                close_frames = 0
 
-        return closed, frames
+        return closed, close_frames, open_frames
 
-    def update(self, landmarks) -> BlinkResult:
-        left_ear = self._ear(landmarks, self.LEFT_EYE)
-        right_ear = self._ear(landmarks, self.RIGHT_EYE)
+    def _adapt_baseline(self, baseline, ear, closed):
+        if closed or ear < baseline * self.open_ratio:
+            return baseline
+        # Learn open-eye EAR slowly; never collapse below a floor.
+        updated = 0.97 * baseline + 0.03 * ear
+        return max(updated, self.baseline_min)
+
+    def _classify_episode(self):
+        left = self.episode_left
+        right = self.episode_right
+
+        if not left and not right:
+            return None
+
+        if left and right:
+            left_t = self.episode_left_closed_at
+            right_t = self.episode_right_closed_at
+            if left_t is not None and right_t is not None:
+                if abs(left_t - right_t) <= self.sync_window_s:
+                    return "Both Eyes"
+
+            # Staggered closures: still both if both eyes participated.
+            # Prefer wink only when the partner stayed clearly open.
+            if (
+                self.episode_right_min_openness >= self.wink_partner_ratio
+                and self.episode_left_min_openness < self.close_ratio
+            ):
+                return "Left Eye"
+            if (
+                self.episode_left_min_openness >= self.wink_partner_ratio
+                and self.episode_right_min_openness < self.close_ratio
+            ):
+                return "Right Eye"
+            return "Both Eyes"
+
+        if left:
+            # Reject false wink if the other eye also dipped hard.
+            if self.episode_right_min_openness < self.close_ratio:
+                return "Both Eyes"
+            if self.episode_right_min_openness < self.wink_partner_ratio:
+                return "Both Eyes"
+            return "Left Eye"
+
+        if self.episode_left_min_openness < self.close_ratio:
+            return "Both Eyes"
+        if self.episode_left_min_openness < self.wink_partner_ratio:
+            return "Both Eyes"
+        return "Right Eye"
+
+    def update_from_ears(self, left_ear, right_ear, now=None) -> BlinkResult:
+        """Process raw EAR values. Useful for tests and the live path."""
+        now = time.perf_counter() if now is None else now
 
         if self.baseline_left is None:
-            self.baseline_left = left_ear
+            self.baseline_left = max(left_ear, self.baseline_min)
         if self.baseline_right is None:
-            self.baseline_right = right_ear
+            self.baseline_right = max(right_ear, self.baseline_min)
 
-        self.left_closed, self.left_frames = self._update_eye(
-            left_ear,
-            self.baseline_left,
-            self.left_closed,
-            self.left_frames,
+        self.left_closed, self.left_frames, self.left_open_frames = (
+            self._update_eye(
+                left_ear,
+                self.baseline_left,
+                self.left_closed,
+                self.left_frames,
+                self.left_open_frames,
+            )
+        )
+        self.right_closed, self.right_frames, self.right_open_frames = (
+            self._update_eye(
+                right_ear,
+                self.baseline_right,
+                self.right_closed,
+                self.right_frames,
+                self.right_open_frames,
+            )
         )
 
-        self.right_closed, self.right_frames = self._update_eye(
-            right_ear,
-            self.baseline_right,
-            self.right_closed,
-            self.right_frames,
-        )
+        left_openness = self._openness(left_ear, self.baseline_left)
+        right_openness = self._openness(right_ear, self.baseline_right)
 
-        # Slowly learn the user's normal open-eye EAR.
-        if not self.left_closed and not self.in_blink:
-            if left_ear > self.baseline_left * 0.84:
-                self.baseline_left = (
-                    0.995 * self.baseline_left + 0.005 * left_ear
-                )
-
-        if not self.right_closed and not self.in_blink:
-            if right_ear > self.baseline_right * 0.84:
-                self.baseline_right = (
-                    0.995 * self.baseline_right + 0.005 * right_ear
-                )
+        if not self.left_closed:
+            self.baseline_left = self._adapt_baseline(
+                self.baseline_left, left_ear, False
+            )
+        if not self.right_closed:
+            self.baseline_right = self._adapt_baseline(
+                self.baseline_right, right_ear, False
+            )
 
         detected = False
 
         if self.left_closed or self.right_closed:
-            self.in_blink = True
-            self.open_frames = 0
-
-            self.episode_left |= self.left_closed
-            self.episode_right |= self.right_closed
-
-        elif self.in_blink:
-            self.open_frames += 1
-
-            # Confirm reopening before finishing the event.
-            if self.open_frames >= 2:
-                if self.episode_left and self.episode_right:
-                    self.latest = "Both Eyes"
-                elif self.episode_left:
-                    self.latest = "Left Eye"
-                elif self.episode_right:
-                    self.latest = "Right Eye"
-
-                detected = True
-                self.in_blink = False
+            if not self.episode_active:
+                self.episode_active = True
                 self.episode_left = False
                 self.episode_right = False
-                self.open_frames = 0
+                self.episode_left_closed_at = None
+                self.episode_right_closed_at = None
+                self.episode_left_min_openness = left_openness
+                self.episode_right_min_openness = right_openness
+
+            self.both_open_since = None
+            self.episode_left_min_openness = min(
+                self.episode_left_min_openness, left_openness
+            )
+            self.episode_right_min_openness = min(
+                self.episode_right_min_openness, right_openness
+            )
+
+            if self.left_closed and not self.episode_left:
+                self.episode_left = True
+                self.episode_left_closed_at = now
+            if self.right_closed and not self.episode_right:
+                self.episode_right = True
+                self.episode_right_closed_at = now
+
+        elif self.episode_active:
+            self.episode_left_min_openness = min(
+                self.episode_left_min_openness, left_openness
+            )
+            self.episode_right_min_openness = min(
+                self.episode_right_min_openness, right_openness
+            )
+
+            if self.both_open_since is None:
+                self.both_open_since = now
+
+            if now - self.both_open_since >= self.settle_s:
+                if now >= self.cooldown_until:
+                    label = self._classify_episode()
+                    if label is not None:
+                        self.latest = label
+                        detected = True
+                        self.cooldown_until = now + self.cooldown_s
+                self._clear_episode()
 
         return BlinkResult(
             latest=self.latest,
@@ -185,5 +301,12 @@ class BlinkDetector:
             right_closed=self.right_closed,
             left_ear=left_ear,
             right_ear=right_ear,
+            left_openness=left_openness,
+            right_openness=right_openness,
             detected=detected,
         )
+
+    def update(self, landmarks, now=None) -> BlinkResult:
+        left_ear = self._ear(landmarks, self.LEFT_EYE)
+        right_ear = self._ear(landmarks, self.RIGHT_EYE)
+        return self.update_from_ears(left_ear, right_ear, now=now)

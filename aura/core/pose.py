@@ -5,6 +5,22 @@ import cv2
 import numpy as np
 
 
+def wrap_angle(degrees: float) -> float:
+    """Wrap a single angle into [-180, 180]."""
+    return (float(degrees) + 180.0) % 360.0 - 180.0
+
+
+def wrap_angles(values: np.ndarray) -> np.ndarray:
+    """Element-wise wrap into [-180, 180]."""
+    arr = np.asarray(values, dtype=np.float64)
+    return (arr + 180.0) % 360.0 - 180.0
+
+
+def angle_delta(current: float, previous: float) -> float:
+    """Shortest signed delta from previous to current in degrees."""
+    return wrap_angle(current - previous)
+
+
 def euler_from_matrix(rotation: np.ndarray) -> np.ndarray:
     """Return [yaw, pitch, roll] in degrees from a 3x3 rotation matrix.
 
@@ -27,7 +43,7 @@ class PoseSmoother:
             self.previous = value.copy()
         else:
             # Wrap differences so yaw/roll crossings around +/-180 do not jump.
-            diff = (value - self.previous + 180.0) % 360.0 - 180.0
+            diff = wrap_angles(value - self.previous)
             self.previous = self.previous + self.alpha * diff
         return self.previous.copy()
 

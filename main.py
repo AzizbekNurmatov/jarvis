@@ -9,6 +9,8 @@ import numpy as np
 from PIL import Image, ImageTk
 
 from aura.core.blink import BlinkDetector
+from aura.core.gesture_engine import GestureEngine
+from aura.core.pose import wrap_angles
 
 
 # ----------------------------
@@ -29,6 +31,7 @@ ACCENT = "#38bdf8"
 GREEN = "#34d399"
 YELLOW = "#fbbf24"
 PURPLE = "#a78bfa"
+ORANGE = "#fb923c"
 
 # MediaPipe Face Mesh landmarks for head pose.
 POSE_POINTS = (1, 152, 33, 263, 61, 291)
@@ -54,6 +57,16 @@ def smooth(previous, current, factor=SMOOTHING):
     if previous is None:
         return current
     return previous * (1.0 - factor) + current * factor
+
+
+def smooth_angles(previous, current, factor=SMOOTHING):
+    """EMA for Euler angles with wrap-aware deltas."""
+    current = np.asarray(current, dtype=np.float64)
+    if previous is None:
+        return current.copy()
+    previous = np.asarray(previous, dtype=np.float64)
+    delta = wrap_angles(current - previous)
+    return previous + factor * delta
 
 
 class AuraHUD:
@@ -82,6 +95,7 @@ class AuraHUD:
         )
 
         self.blink_detector = BlinkDetector()
+        self.gesture_engine = GestureEngine()
 
         self.show_mesh = tk.BooleanVar(value=False)
         self.show_axes = tk.BooleanVar(value=True)
@@ -101,6 +115,8 @@ class AuraHUD:
 
         self.latest_blink = "None"
         self.blink_result = None
+        self.latest_gesture = "None"
+        self.gesture_flash_until = 0.0
 
         self.video_image = None
 
@@ -443,6 +459,108 @@ class AuraHUD:
             )
             self.eye_indicators[key] = indicator
 
+        openness = tk.Frame(blink_card, bg=PANEL)
+        openness.pack(fill="x", pady=(12, 0))
+
+        self.left_open_bar, self.left_open_label = (
+            self._openness_meter(openness, "L OPEN")
+        )
+        self.right_open_bar, self.right_open_label = (
+            self._openness_meter(openness, "R OPEN")
+        )
+
+        gesture_card = self.card(
+            right,
+            "GESTURE RECOGNITION",
+            "One-shot events from blinks and head motion",
+        )
+        gesture_card.pack(fill="x", pady=(0, 8))
+
+        gesture_panel = tk.Frame(
+            gesture_card,
+            bg=PANEL_2,
+            padx=14,
+            pady=10,
+        )
+        gesture_panel.pack(fill="x")
+
+        top_row = tk.Frame(gesture_panel, bg=PANEL_2)
+        top_row.pack(fill="x")
+
+        tk.Label(
+            top_row,
+            text="LATEST GESTURE",
+            bg=PANEL_2,
+            fg=MUTED,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left")
+
+        self.gesture_status_label = tk.Label(
+            top_row,
+            text="Ready",
+            bg=PANEL_2,
+            fg=GREEN,
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.gesture_status_label.pack(side="right")
+
+        self.gesture_label = tk.Label(
+            gesture_panel,
+            text="Waiting for gesture...",
+            bg=PANEL_2,
+            fg=TEXT,
+            font=("Segoe UI", 16, "bold"),
+        )
+        self.gesture_label.pack(anchor="w", pady=(6, 0))
+
+        self.gesture_flash = tk.Canvas(
+            gesture_card,
+            height=8,
+            bg=PANEL,
+            highlightthickness=0,
+        )
+        self.gesture_flash.pack(fill="x", pady=(10, 0))
+        self._gesture_flash_bar = self.gesture_flash.create_rectangle(
+            0, 0, 0, 8, fill=ACCENT, outline=""
+        )
+
+    def _openness_meter(self, parent, title):
+        wrap = tk.Frame(parent, bg=PANEL)
+        wrap.pack(side="left", expand=True, fill="x", padx=3)
+
+        header = tk.Frame(wrap, bg=PANEL)
+        header.pack(fill="x")
+
+        tk.Label(
+            header,
+            text=title,
+            bg=PANEL,
+            fg=MUTED,
+            font=("Segoe UI", 8, "bold"),
+        ).pack(side="left")
+
+        value = tk.Label(
+            header,
+            text="100%",
+            bg=PANEL,
+            fg=TEXT,
+            font=("Consolas", 8),
+        )
+        value.pack(side="right")
+
+        canvas = tk.Canvas(
+            wrap,
+            height=8,
+            bg="#0c1626",
+            highlightthickness=0,
+        )
+        canvas.pack(fill="x", pady=(4, 0))
+        bar = canvas.create_rectangle(
+            0, 0, 0, 8, fill=ACCENT, outline=""
+        )
+        canvas._bar_id = bar
+        return canvas, value
+
     def _sync_right_width(self, event):
         self.right_canvas.itemconfigure(
             self.right_window,
@@ -491,8 +609,12 @@ class AuraHUD:
             )
 
         self.blink_detector.reset()
+        self.gesture_engine.reset()
         self.latest_blink = "None"
+        self.latest_gesture = "None"
+        self.gesture_flash_until = 0.0
         self.render_blink()
+        self.render_gesture()
 
     # ----------------------------
     # HEAD ROTATION / POSITION
@@ -539,13 +661,17 @@ class AuraHUD:
         matrix, _ = cv2.Rodrigues(rotation_vector)
         angles = cv2.RQDecomp3x3(matrix)[0]
 
-        rotation = np.array(
-            [
-                angles[1],  # yaw
-                angles[0],  # pitch
-                angles[2],  # roll
-            ],
-            dtype=np.float64,
+        # Wrap immediately so near-360° absolute pitch/yaw
+        # never produces +356° relative readings after subtract.
+        rotation = wrap_angles(
+            np.array(
+                [
+                    angles[1],  # yaw
+                    angles[0],  # pitch
+                    angles[2],  # roll
+                ],
+                dtype=np.float64,
+            )
         )
 
         # Normalized image-space movement and apparent face
@@ -601,6 +727,70 @@ class AuraHUD:
                 bg=ACCENT if active else PANEL_2,
                 fg="#06101b" if active else MUTED,
             )
+
+    def _set_openness_bar(self, canvas, label, openness):
+        openness = clamp(float(openness), 0.0, 1.0)
+        width = max(canvas.winfo_width(), 40)
+        fill = max(2, int(width * openness))
+        color = GREEN if openness > 0.55 else (
+            YELLOW if openness > 0.30 else ORANGE
+        )
+        canvas.coords(canvas._bar_id, 0, 0, fill, 8)
+        canvas.itemconfigure(canvas._bar_id, fill=color)
+        label.config(text=f"{int(round(openness * 100)):d}%")
+
+    def render_openness(self):
+        if self.blink_result is None:
+            left = 1.0
+            right = 1.0
+        else:
+            left = self.blink_result.left_openness
+            right = self.blink_result.right_openness
+
+        self._set_openness_bar(
+            self.left_open_bar, self.left_open_label, left
+        )
+        self._set_openness_bar(
+            self.right_open_bar, self.right_open_label, right
+        )
+
+    def render_gesture(self):
+        label = self.latest_gesture
+        if label == "None":
+            self.gesture_label.config(
+                text="Waiting for gesture...",
+                fg=MUTED,
+            )
+        else:
+            self.gesture_label.config(
+                text=label,
+                fg=ACCENT,
+            )
+        self.render_gesture_status()
+
+    def render_gesture_status(self):
+        status = self.gesture_engine.status
+        colors = {
+            "Ready": GREEN,
+            "Detecting": YELLOW,
+            "Cooldown": ORANGE,
+        }
+        self.gesture_status_label.config(
+            text=status,
+            fg=colors.get(status, MUTED),
+        )
+
+    def render_gesture_flash(self):
+        width = max(self.gesture_flash.winfo_width(), 10)
+        active = time.perf_counter() < self.gesture_flash_until
+        fill = width if active else 0
+        self.gesture_flash.coords(
+            self._gesture_flash_bar, 0, 0, fill, 8
+        )
+        self.gesture_flash.itemconfigure(
+            self._gesture_flash_bar,
+            fill=ACCENT if active else PANEL,
+        )
 
     # ----------------------------
     # AXIS VISUALIZATION
@@ -726,7 +916,7 @@ class AuraHUD:
             )
 
             if rotation is not None:
-                self.smoothed_rotation = smooth(
+                self.smoothed_rotation = smooth_angles(
                     self.smoothed_rotation, rotation
                 )
                 self.smoothed_position = smooth(
@@ -743,7 +933,7 @@ class AuraHUD:
                         self.smoothed_position.copy()
                     )
 
-                self.rotation = (
+                self.rotation = wrap_angles(
                     self.smoothed_rotation
                     - self.neutral_rotation
                 )
@@ -752,6 +942,19 @@ class AuraHUD:
                     self.smoothed_position
                     - self.neutral_position
                 )
+
+            gesture_event = self.gesture_engine.update(
+                self.blink_result,
+                self.rotation,
+            )
+            if gesture_event is not None:
+                self.latest_gesture = gesture_event.label
+                self.gesture_flash_until = (
+                    time.perf_counter() + 0.45
+                )
+                self.render_gesture()
+            else:
+                self.render_gesture_status()
 
             # --- OPTIONAL FACE MESH ---
             if self.show_mesh.get():
@@ -850,9 +1053,12 @@ class AuraHUD:
             )
             self.blink_detector.face_lost()
             self.blink_result = None
+            self.render_gesture_status()
 
         self.update_metrics()
         self.draw_axes()
+        self.render_openness()
+        self.render_gesture_flash()
 
         # FPS calculation.
         now = time.perf_counter()
