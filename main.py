@@ -178,8 +178,8 @@ class AuraHUD:
             text="--",
             fg=color,
             bg=PANEL,
-            font=("Consolas", 15, "bold"),
-            width=7,
+            font=("Consolas", 13, "bold"),
+            width=6,
         )
         label.pack(pady=(2, 0))
         return label
@@ -234,20 +234,15 @@ class AuraHUD:
         body = tk.Frame(self.root, bg=BG, padx=16, pady=6)
         body.pack(fill="both", expand=True)
 
-        body.grid_columnconfigure(0, weight=3)
-        body.grid_columnconfigure(1, weight=2)
-        body.grid_rowconfigure(0, weight=1)
-
-        left = tk.Frame(body, bg=BG)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        left.grid_rowconfigure(0, weight=1)
-        left.grid_columnconfigure(0, weight=1)
-
-        right = tk.Frame(body, bg=BG)
-        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        # Fixed-width metrics rail on the right; camera owns the rest.
+        right = tk.Frame(body, bg=BG, width=360)
+        right.pack(side="right", fill="y", padx=(10, 0))
+        right.pack_propagate(False)
         right.grid_columnconfigure(0, weight=1)
         right.grid_columnconfigure(1, weight=1)
-        right.grid_rowconfigure(3, weight=1)
+
+        left = tk.Frame(body, bg=BG)
+        left.pack(side="left", fill="both", expand=True)
 
         # Camera preview.
         camera_card = self.card(
@@ -305,7 +300,8 @@ class AuraHUD:
             text="Initializing camera...",
             fg=MUTED,
         )
-        self.camera_label.place(relx=0.5, rely=0.5, anchor="center")
+        # Fill the host completely — frame scaling crops to cover.
+        self.camera_label.place(x=0, y=0, relwidth=1, relheight=1)
 
         # --- Compact right dashboard (no scroll at normal size) ---
         metrics_card = self.card(
@@ -982,20 +978,19 @@ class AuraHUD:
             text=f"FPS: {self.fps:.1f}"
         )
 
-        # Fit the frame inside the fixed video host, never the
-        # image label itself (that causes a resize feedback loop).
-        target_width = max(self.video_frame.winfo_width() - 4, 1)
-        target_height = max(self.video_frame.winfo_height() - 4, 1)
+        # Cover-scale into the video host (crop edges, no letterbox).
+        # Size comes from the host frame, never the image label.
+        target_width = max(self.video_frame.winfo_width(), 1)
+        target_height = max(self.video_frame.winfo_height(), 1)
         if target_width < 32 or target_height < 32:
             self.root.after(50, self.update_frame)
             return
 
-        scale = min(
+        scale = max(
             target_width / width,
             target_height / height,
         )
-
-        display = cv2.resize(
+        resized = cv2.resize(
             frame,
             (
                 max(1, int(width * scale)),
@@ -1003,6 +998,24 @@ class AuraHUD:
             ),
             interpolation=cv2.INTER_AREA,
         )
+        rh, rw = resized.shape[:2]
+        x0 = max(0, (rw - target_width) // 2)
+        y0 = max(0, (rh - target_height) // 2)
+        display = resized[
+            y0:y0 + target_height,
+            x0:x0 + target_width,
+        ]
+
+        # Guard against off-by-one crop sizes on odd dimensions.
+        if (
+            display.shape[1] != target_width
+            or display.shape[0] != target_height
+        ):
+            display = cv2.resize(
+                display,
+                (target_width, target_height),
+                interpolation=cv2.INTER_AREA,
+            )
 
         image = Image.fromarray(
             cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
