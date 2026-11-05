@@ -1,7 +1,6 @@
 
 import time
 import tkinter as tk
-from tkinter import ttk
 
 import cv2
 import mediapipe as mp
@@ -10,6 +9,7 @@ from PIL import Image, ImageTk
 
 from aura.core.blink import BlinkDetector
 from aura.core.gesture_engine import GestureEngine
+from aura.core.hand_tracking import HandTracker
 from aura.core.pose import wrap_angles
 
 
@@ -73,8 +73,8 @@ class AuraHUD:
     def __init__(self, root):
         self.root = root
         self.root.title("AURA | Head Tracking HUD")
-        self.root.geometry("1480x980")
-        self.root.minsize(1180, 820)
+        self.root.geometry("1460x900")
+        self.root.minsize(1180, 760)
         self.root.configure(bg=BG)
 
         self.running = True
@@ -96,9 +96,11 @@ class AuraHUD:
 
         self.blink_detector = BlinkDetector()
         self.gesture_engine = GestureEngine()
+        self.hand_tracker = HandTracker(mirrored=True)
 
         self.show_mesh = tk.BooleanVar(value=False)
         self.show_axes = tk.BooleanVar(value=True)
+        self.show_hands = tk.BooleanVar(value=False)
 
         self.neutral_rotation = None
         self.neutral_position = None
@@ -132,8 +134,8 @@ class AuraHUD:
         outer = tk.Frame(
             parent,
             bg=PANEL,
-            padx=14,
-            pady=12,
+            padx=12,
+            pady=8,
             highlightbackground="#26354d",
             highlightthickness=1,
         )
@@ -143,7 +145,7 @@ class AuraHUD:
             text=title,
             fg=TEXT,
             bg=PANEL,
-            font=("Segoe UI", 11, "bold"),
+            font=("Segoe UI", 10, "bold"),
             anchor="w",
         ).pack(fill="x")
 
@@ -155,7 +157,7 @@ class AuraHUD:
                 bg=PANEL,
                 font=("Segoe UI", 8),
                 anchor="w",
-            ).pack(fill="x", pady=(2, 6))
+            ).pack(fill="x", pady=(1, 4))
 
         return outer
 
@@ -168,7 +170,7 @@ class AuraHUD:
             text=name,
             fg=MUTED,
             bg=PANEL,
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 8),
         ).pack()
 
         label = tk.Label(
@@ -176,14 +178,14 @@ class AuraHUD:
             text="--",
             fg=color,
             bg=PANEL,
-            font=("Consolas", 18, "bold"),
-            width=8,
+            font=("Consolas", 15, "bold"),
+            width=7,
         )
-        label.pack(pady=(4, 0))
+        label.pack(pady=(2, 0))
         return label
 
     def build_ui(self):
-        header = tk.Frame(self.root, bg=BG, padx=24, pady=14)
+        header = tk.Frame(self.root, bg=BG, padx=18, pady=10)
         header.pack(fill="x")
 
         tk.Label(
@@ -191,16 +193,16 @@ class AuraHUD:
             text="AURA",
             fg=ACCENT,
             bg=BG,
-            font=("Segoe UI", 22, "bold"),
+            font=("Segoe UI", 20, "bold"),
         ).pack(side="left")
 
         tk.Label(
             header,
-            text="  /  SPATIAL HEAD TRACKING",
+            text="  /  SPATIAL TRACKING",
             fg=MUTED,
             bg=BG,
-            font=("Segoe UI", 11),
-        ).pack(side="left", pady=(8, 0))
+            font=("Segoe UI", 10),
+        ).pack(side="left", pady=(7, 0))
 
         self.fps_label = tk.Label(
             header,
@@ -216,7 +218,7 @@ class AuraHUD:
             text="● INITIALIZING",
             fg=YELLOW,
             bg=BG,
-            font=("Segoe UI", 11, "bold"),
+            font=("Segoe UI", 10, "bold"),
         )
         self.status_label.pack(side="right")
 
@@ -227,9 +229,9 @@ class AuraHUD:
             bg=BG,
             font=("Segoe UI", 10, "bold"),
         )
-        self.header_gesture_label.pack(side="right", padx=(0, 18))
+        self.header_gesture_label.pack(side="right", padx=(0, 16))
 
-        body = tk.Frame(self.root, bg=BG, padx=22, pady=8)
+        body = tk.Frame(self.root, bg=BG, padx=16, pady=6)
         body.pack(fill="both", expand=True)
 
         body.grid_columnconfigure(0, weight=3)
@@ -237,51 +239,45 @@ class AuraHUD:
         body.grid_rowconfigure(0, weight=1)
 
         left = tk.Frame(body, bg=BG)
-        left.grid(
-            row=0, column=0,
-            sticky="nsew", padx=(0, 10)
-        )
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         left.grid_rowconfigure(0, weight=1)
         left.grid_columnconfigure(0, weight=1)
 
-        right_shell = tk.Frame(body, bg=BG)
-        right_shell.grid(
-            row=0, column=1,
-            sticky="nsew", padx=(10, 0)
-        )
-        right_shell.grid_rowconfigure(0, weight=1)
-        right_shell.grid_columnconfigure(0, weight=1)
+        right = tk.Frame(body, bg=BG)
+        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        right.grid_columnconfigure(0, weight=1)
+        right.grid_columnconfigure(1, weight=1)
+        right.grid_rowconfigure(3, weight=1)
 
-        # Camera preview: reserve controls first so the live
-        # frame cannot steal their vertical space.
+        # Camera preview.
         camera_card = self.card(
             left, "LIVE CAMERA",
-            "Face Mesh / Pose / Eye Detection"
+            "Face / pose / eyes / optional hands"
         )
         camera_card.pack(fill="both", expand=True)
 
         controls = tk.Frame(camera_card, bg=PANEL)
-        controls.pack(side="bottom", fill="x", pady=(8, 0))
+        controls.pack(side="bottom", fill="x", pady=(6, 0))
 
-        tk.Checkbutton(
-            controls,
-            text="Face Mesh",
-            variable=self.show_mesh,
-            bg=PANEL, fg=TEXT,
-            selectcolor=PANEL_2,
-            activebackground=PANEL,
-            activeforeground=TEXT,
-        ).pack(side="left", padx=5)
-
-        tk.Checkbutton(
-            controls,
-            text="Pose Axes",
-            variable=self.show_axes,
-            bg=PANEL, fg=TEXT,
-            selectcolor=PANEL_2,
-            activebackground=PANEL,
-            activeforeground=TEXT,
-        ).pack(side="left", padx=5)
+        for text, variable in (
+            ("Face Mesh", self.show_mesh),
+            ("Pose Axes", self.show_axes),
+            ("Hand Tracking", self.show_hands),
+        ):
+            tk.Checkbutton(
+                controls,
+                text=text,
+                variable=variable,
+                command=(
+                    self._on_hand_toggle
+                    if variable is self.show_hands
+                    else None
+                ),
+                bg=PANEL, fg=TEXT,
+                selectcolor=PANEL_2,
+                activebackground=PANEL,
+                activeforeground=TEXT,
+            ).pack(side="left", padx=4)
 
         tk.Button(
             controls,
@@ -290,19 +286,17 @@ class AuraHUD:
             bg=ACCENT,
             fg="#06101b",
             relief="flat",
-            padx=16,
-            pady=7,
-            font=("Segoe UI", 10, "bold"),
-        ).pack(side="right", padx=5)
+            padx=12,
+            pady=5,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="right", padx=4)
 
-        # Fixed-geometry video host. The image label is placed
-        # inside and must never drive pack/grid sizing.
         self.video_frame = tk.Frame(
             camera_card,
             bg="#050a14",
             highlightthickness=0,
         )
-        self.video_frame.pack(fill="both", expand=True, pady=(8, 0))
+        self.video_frame.pack(fill="both", expand=True, pady=(4, 0))
         self.video_frame.pack_propagate(False)
 
         self.camera_label = tk.Label(
@@ -311,80 +305,37 @@ class AuraHUD:
             text="Initializing camera...",
             fg=MUTED,
         )
-        self.camera_label.place(
-            relx=0.5, rely=0.5, anchor="center"
+        self.camera_label.place(relx=0.5, rely=0.5, anchor="center")
+
+        # --- Compact right dashboard (no scroll at normal size) ---
+        metrics_card = self.card(
+            right, "HEAD METRICS",
+            "Rotation (°) and relative position"
+        )
+        metrics_card.grid(
+            row=0, column=0, columnspan=2,
+            sticky="ew", pady=(0, 6)
         )
 
-        # Scrollable metrics column so eye tracking stays reachable.
-        self.right_canvas = tk.Canvas(
-            right_shell,
-            bg=BG,
-            highlightthickness=0,
-            borderwidth=0,
-        )
-        self.right_scroll = ttk.Scrollbar(
-            right_shell,
-            orient="vertical",
-            command=self.right_canvas.yview,
-        )
-        self.right_canvas.configure(
-            yscrollcommand=self.right_scroll.set
-        )
-        self.right_canvas.grid(row=0, column=0, sticky="nsew")
-        self.right_scroll.grid(row=0, column=1, sticky="ns")
+        rotation_row = tk.Frame(metrics_card, bg=PANEL)
+        rotation_row.pack(fill="x")
+        self.yaw_label = self.metric(rotation_row, "YAW", ACCENT)
+        self.pitch_label = self.metric(rotation_row, "PITCH", GREEN)
+        self.roll_label = self.metric(rotation_row, "ROLL", PURPLE)
 
-        right = tk.Frame(self.right_canvas, bg=BG)
-        self.right_window = self.right_canvas.create_window(
-            (0, 0), window=right, anchor="nw"
+        position_row = tk.Frame(metrics_card, bg=PANEL)
+        position_row.pack(fill="x", pady=(6, 0))
+        self.x_label = self.metric(position_row, "X", ACCENT)
+        self.y_label = self.metric(position_row, "Y", GREEN)
+        self.z_label = self.metric(position_row, "Z", PURPLE)
+
+        gesture_card = self.card(right, "GESTURE RECOGNITION")
+        gesture_card.grid(
+            row=1, column=0, columnspan=2,
+            sticky="ew", pady=(0, 6)
         )
 
-        right.bind(
-            "<Configure>",
-            lambda _event: self.right_canvas.configure(
-                scrollregion=self.right_canvas.bbox("all")
-            ),
-        )
-        self.right_canvas.bind(
-            "<Configure>",
-            self._sync_right_width,
-        )
-        self._right_shell = right_shell
-        self.root.bind_all("<MouseWheel>", self._on_right_mousewheel)
-
-        # Right-side metrics. Gesture + eyes are near the top
-        # so the new panels are visible without scrolling.
-        rotation_card = self.card(
-            right, "HEAD ROTATION",
-            "Relative orientation (degrees)"
-        )
-        rotation_card.pack(fill="x", pady=(0, 10))
-
-        rotation_row = tk.Frame(rotation_card, bg=PANEL)
-        rotation_row.pack(fill="x", pady=(4, 0))
-
-        self.yaw_label = self.metric(
-            rotation_row, "YAW", ACCENT
-        )
-        self.pitch_label = self.metric(
-            rotation_row, "PITCH", GREEN
-        )
-        self.roll_label = self.metric(
-            rotation_row, "ROLL", PURPLE
-        )
-
-        gesture_card = self.card(
-            right,
-            "GESTURE RECOGNITION",
-            "One-shot events from blinks and head motion",
-        )
-        gesture_card.pack(fill="x", pady=(0, 10))
-
-        gesture_panel = tk.Frame(
-            gesture_card,
-            bg=PANEL_2,
-            padx=14,
-            pady=10,
-        )
+        gesture_panel = tk.Frame(gesture_card, bg=PANEL_2, padx=10, pady=6)
         gesture_panel.pack(fill="x")
 
         top_row = tk.Frame(gesture_panel, bg=PANEL_2)
@@ -392,10 +343,10 @@ class AuraHUD:
 
         tk.Label(
             top_row,
-            text="LATEST GESTURE",
+            text="LATEST",
             bg=PANEL_2,
             fg=MUTED,
-            font=("Segoe UI", 9, "bold"),
+            font=("Segoe UI", 8, "bold"),
         ).pack(side="left")
 
         self.gesture_status_label = tk.Label(
@@ -403,7 +354,7 @@ class AuraHUD:
             text="Ready",
             bg=PANEL_2,
             fg=GREEN,
-            font=("Segoe UI", 9, "bold"),
+            font=("Segoe UI", 8, "bold"),
         )
         self.gesture_status_label.pack(side="right")
 
@@ -412,127 +363,76 @@ class AuraHUD:
             text="Waiting for gesture...",
             bg=PANEL_2,
             fg=TEXT,
-            font=("Segoe UI", 16, "bold"),
+            font=("Segoe UI", 13, "bold"),
         )
-        self.gesture_label.pack(anchor="w", pady=(6, 0))
+        self.gesture_label.pack(anchor="w", pady=(2, 0))
 
         self.gesture_flash = tk.Canvas(
             gesture_card,
-            height=8,
+            height=5,
             bg=PANEL,
             highlightthickness=0,
         )
-        self.gesture_flash.pack(fill="x", pady=(10, 0))
+        self.gesture_flash.pack(fill="x", pady=(6, 0))
         self._gesture_flash_bar = self.gesture_flash.create_rectangle(
-            0, 0, 0, 8, fill=ACCENT, outline=""
+            0, 0, 0, 5, fill=ACCENT, outline=""
         )
 
-        blink_card = self.card(
-            right,
-            "EYE TRACKING",
-            "Most recent blink — no history recorded",
-        )
-        blink_card.pack(fill="x", pady=(0, 10))
-
-        latest_panel = tk.Frame(
-            blink_card,
-            bg=PANEL_2,
-            padx=14,
-            pady=8,
-        )
-        latest_panel.pack(fill="x")
-
-        tk.Label(
-            latest_panel,
-            text="LATEST DETECTED BLINK",
-            bg=PANEL_2,
-            fg=MUTED,
-            font=("Segoe UI", 9, "bold"),
-        ).pack(anchor="w")
+        blink_card = self.card(right, "EYE TRACKING")
+        blink_card.grid(row=2, column=0, sticky="nsew", padx=(0, 4), pady=(0, 6))
 
         self.blink_label = tk.Label(
-            latest_panel,
+            blink_card,
             text="Waiting for blink...",
-            bg=PANEL_2,
-            fg=TEXT,
-            font=("Segoe UI", 16, "bold"),
+            bg=PANEL,
+            fg=MUTED,
+            font=("Segoe UI", 12, "bold"),
+            anchor="w",
         )
-        self.blink_label.pack(anchor="w", pady=(4, 0))
+        self.blink_label.pack(fill="x")
 
         indicators = tk.Frame(blink_card, bg=PANEL)
-        indicators.pack(fill="x", pady=(10, 0))
+        indicators.pack(fill="x", pady=(6, 0))
 
         self.eye_indicators = {}
-
         for key, title in [
-            ("Left Eye", "LEFT"),
-            ("Right Eye", "RIGHT"),
+            ("Left Eye", "L"),
+            ("Right Eye", "R"),
             ("Both Eyes", "BOTH"),
         ]:
             indicator = tk.Label(
                 indicators,
-                text=f"◉  {title}",
+                text=title,
                 bg=PANEL_2,
                 fg=MUTED,
-                padx=10,
-                pady=8,
-                font=("Segoe UI", 10, "bold"),
+                padx=6,
+                pady=4,
+                font=("Segoe UI", 8, "bold"),
             )
-            indicator.pack(
-                side="left",
-                fill="x",
-                expand=True,
-                padx=3,
-            )
+            indicator.pack(side="left", fill="x", expand=True, padx=2)
             self.eye_indicators[key] = indicator
 
         openness = tk.Frame(blink_card, bg=PANEL)
-        openness.pack(fill="x", pady=(12, 0))
-
+        openness.pack(fill="x", pady=(8, 0))
         self.left_open_bar, self.left_open_label = (
-            self._openness_meter(openness, "L OPEN")
+            self._openness_meter(openness, "L")
         )
         self.right_open_bar, self.right_open_label = (
-            self._openness_meter(openness, "R OPEN")
+            self._openness_meter(openness, "R")
         )
 
-        position_card = self.card(
-            right, "HEAD POSITION",
-            "Relative to your calibrated neutral position"
-        )
-        position_card.pack(fill="x", pady=(0, 10))
-
-        position_row = tk.Frame(position_card, bg=PANEL)
-        position_row.pack(fill="x", pady=(4, 0))
-
-        self.x_label = self.metric(
-            position_row, "X", ACCENT
-        )
-        self.y_label = self.metric(
-            position_row, "Y", GREEN
-        )
-        self.z_label = self.metric(
-            position_row, "Z", PURPLE
-        )
-
-        graph_card = self.card(
-            right, "MOVEMENT AXES",
-            "Head movement relative to center"
-        )
-        graph_card.pack(fill="x", pady=(0, 8))
+        graph_card = self.card(right, "MOVEMENT AXES")
+        graph_card.grid(row=2, column=1, sticky="nsew", padx=(4, 0), pady=(0, 6))
 
         self.axis_canvas = tk.Canvas(
             graph_card,
             bg="#0c1626",
-            height=96,
+            height=110,
             highlightthickness=0,
         )
-        self.axis_canvas.pack(fill="x", pady=(4, 0))
+        self.axis_canvas.pack(fill="both", expand=True, pady=(2, 0))
         self._axis_size = (0, 0)
-        self.axis_canvas.bind(
-            "<Configure>",
-            self._on_axis_configure,
-        )
+        self.axis_canvas.bind("<Configure>", self._on_axis_configure)
 
     def _openness_meter(self, parent, title):
         wrap = tk.Frame(parent, bg=PANEL)
@@ -571,27 +471,8 @@ class AuraHUD:
         canvas._bar_id = bar
         return canvas, value
 
-    def _sync_right_width(self, event):
-        self.right_canvas.itemconfigure(
-            self.right_window,
-            width=max(event.width, 1),
-        )
-
-    def _on_right_mousewheel(self, event):
-        if not self.right_canvas.winfo_exists():
-            return
-
-        widget = self.root.winfo_containing(
-            event.x_root, event.y_root
-        )
-        while widget is not None:
-            if widget == self._right_shell:
-                self.right_canvas.yview_scroll(
-                    int(-event.delta / 120),
-                    "units",
-                )
-                return
-            widget = widget.master if hasattr(widget, "master") else None
+    def _on_hand_toggle(self):
+        self.hand_tracker.set_enabled(self.show_hands.get())
 
     def _on_axis_configure(self, event):
         size = (event.width, event.height)
@@ -803,7 +684,7 @@ class AuraHUD:
         active = time.perf_counter() < self.gesture_flash_until
         fill = width if active else 0
         self.gesture_flash.coords(
-            self._gesture_flash_bar, 0, 0, fill, 8
+            self._gesture_flash_bar, 0, 0, fill, 5
         )
         self.gesture_flash.itemconfigure(
             self._gesture_flash_bar,
@@ -901,8 +782,16 @@ class AuraHUD:
         frame = cv2.flip(frame, 1)
         height, width = frame.shape[:2]
 
+        # Single RGB conversion shared by face mesh and hands.
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result = self.mesh.process(rgb)
+
+        hands_on = self.show_hands.get()
+        if hands_on != self.hand_tracker.enabled:
+            self.hand_tracker.set_enabled(hands_on)
+        if hands_on:
+            tracked_hands = self.hand_tracker.process(rgb)
+            self.hand_tracker.draw(frame, tracked_hands)
 
         self.face_visible = bool(
             result.multi_face_landmarks
@@ -1158,21 +1047,17 @@ class AuraHUD:
 
     def close(self):
         self.running = False
-        try:
-            self.root.unbind_all("<MouseWheel>")
-        except tk.TclError:
-            pass
 
         if self.cap.isOpened():
             self.cap.release()
 
+        self.hand_tracker.close()
         self.mesh.close()
         self.root.destroy()
 
 
 if __name__ == "__main__":
-    print("AURA starting with blink + gesture recognition enabled.")
-    print("Look for GESTURE RECOGNITION under HEAD ROTATION on the right.")
+    print("AURA starting — hand tracking is off until you enable the checkbox.")
     root = tk.Tk()
     app = AuraHUD(root)
     root.mainloop()
