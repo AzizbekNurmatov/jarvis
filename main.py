@@ -60,8 +60,8 @@ class AuraHUD:
     def __init__(self, root):
         self.root = root
         self.root.title("AURA | Head Tracking HUD")
-        self.root.geometry("1460x900")
-        self.root.minsize(1100, 720)
+        self.root.geometry("1460x920")
+        self.root.minsize(1180, 760)
         self.root.configure(bg=BG)
 
         self.running = True
@@ -116,8 +116,8 @@ class AuraHUD:
         outer = tk.Frame(
             parent,
             bg=PANEL,
-            padx=18,
-            pady=15,
+            padx=14,
+            pady=12,
             highlightbackground="#26354d",
             highlightthickness=1,
         )
@@ -127,7 +127,7 @@ class AuraHUD:
             text=title,
             fg=TEXT,
             bg=PANEL,
-            font=("Segoe UI", 12, "bold"),
+            font=("Segoe UI", 11, "bold"),
             anchor="w",
         ).pack(fill="x")
 
@@ -137,9 +137,9 @@ class AuraHUD:
                 text=subtitle,
                 fg=MUTED,
                 bg=PANEL,
-                font=("Segoe UI", 9),
+                font=("Segoe UI", 8),
                 anchor="w",
-            ).pack(fill="x", pady=(3, 10))
+            ).pack(fill="x", pady=(2, 6))
 
         return outer
 
@@ -152,21 +152,22 @@ class AuraHUD:
             text=name,
             fg=MUTED,
             bg=PANEL,
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 9),
         ).pack()
 
         label = tk.Label(
             item,
-            text="0.0",
+            text="--",
             fg=color,
             bg=PANEL,
-            font=("Segoe UI", 22, "bold"),
+            font=("Consolas", 18, "bold"),
+            width=8,
         )
-        label.pack(pady=(5, 0))
+        label.pack(pady=(4, 0))
         return label
 
     def build_ui(self):
-        header = tk.Frame(self.root, bg=BG, padx=24, pady=18)
+        header = tk.Frame(self.root, bg=BG, padx=24, pady=14)
         header.pack(fill="x")
 
         tk.Label(
@@ -174,7 +175,7 @@ class AuraHUD:
             text="AURA",
             fg=ACCENT,
             bg=BG,
-            font=("Segoe UI", 25, "bold"),
+            font=("Segoe UI", 22, "bold"),
         ).pack(side="left")
 
         tk.Label(
@@ -183,7 +184,16 @@ class AuraHUD:
             fg=MUTED,
             bg=BG,
             font=("Segoe UI", 11),
-        ).pack(side="left", pady=(10, 0))
+        ).pack(side="left", pady=(8, 0))
+
+        self.fps_label = tk.Label(
+            header,
+            text="FPS: --",
+            fg=MUTED,
+            bg=BG,
+            font=("Consolas", 10),
+        )
+        self.fps_label.pack(side="right", padx=(16, 0))
 
         self.status_label = tk.Label(
             header,
@@ -197,8 +207,8 @@ class AuraHUD:
         body = tk.Frame(self.root, bg=BG, padx=22, pady=8)
         body.pack(fill="both", expand=True)
 
-        body.grid_columnconfigure(0, weight=5)
-        body.grid_columnconfigure(1, weight=4)
+        body.grid_columnconfigure(0, weight=3)
+        body.grid_columnconfigure(1, weight=2)
         body.grid_rowconfigure(0, weight=1)
 
         left = tk.Frame(body, bg=BG)
@@ -206,32 +216,27 @@ class AuraHUD:
             row=0, column=0,
             sticky="nsew", padx=(0, 10)
         )
+        left.grid_rowconfigure(0, weight=1)
+        left.grid_columnconfigure(0, weight=1)
 
-        right = tk.Frame(body, bg=BG)
-        right.grid(
+        right_shell = tk.Frame(body, bg=BG)
+        right_shell.grid(
             row=0, column=1,
             sticky="nsew", padx=(10, 0)
         )
+        right_shell.grid_rowconfigure(0, weight=1)
+        right_shell.grid_columnconfigure(0, weight=1)
 
-        # Camera preview.
+        # Camera preview: reserve controls first so the live
+        # frame cannot steal their vertical space.
         camera_card = self.card(
             left, "LIVE CAMERA",
             "Face Mesh / Pose / Eye Detection"
         )
         camera_card.pack(fill="both", expand=True)
 
-        self.camera_label = tk.Label(
-            camera_card,
-            bg="#050a14",
-            text="Initializing camera...",
-            fg=MUTED,
-        )
-        self.camera_label.pack(
-            fill="both", expand=True, pady=(8, 8)
-        )
-
         controls = tk.Frame(camera_card, bg=PANEL)
-        controls.pack(fill="x")
+        controls.pack(side="bottom", fill="x", pady=(8, 0))
 
         tk.Checkbutton(
             controls,
@@ -265,15 +270,71 @@ class AuraHUD:
             font=("Segoe UI", 10, "bold"),
         ).pack(side="right", padx=5)
 
+        # Fixed-geometry video host. The image label is placed
+        # inside and must never drive pack/grid sizing.
+        self.video_frame = tk.Frame(
+            camera_card,
+            bg="#050a14",
+            highlightthickness=0,
+        )
+        self.video_frame.pack(fill="both", expand=True, pady=(8, 0))
+        self.video_frame.pack_propagate(False)
+
+        self.camera_label = tk.Label(
+            self.video_frame,
+            bg="#050a14",
+            text="Initializing camera...",
+            fg=MUTED,
+        )
+        self.camera_label.place(
+            relx=0.5, rely=0.5, anchor="center"
+        )
+
+        # Scrollable metrics column so eye tracking stays reachable.
+        self.right_canvas = tk.Canvas(
+            right_shell,
+            bg=BG,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self.right_scroll = ttk.Scrollbar(
+            right_shell,
+            orient="vertical",
+            command=self.right_canvas.yview,
+        )
+        self.right_canvas.configure(
+            yscrollcommand=self.right_scroll.set
+        )
+        self.right_canvas.grid(row=0, column=0, sticky="nsew")
+        self.right_scroll.grid(row=0, column=1, sticky="ns")
+
+        right = tk.Frame(self.right_canvas, bg=BG)
+        self.right_window = self.right_canvas.create_window(
+            (0, 0), window=right, anchor="nw"
+        )
+
+        right.bind(
+            "<Configure>",
+            lambda _event: self.right_canvas.configure(
+                scrollregion=self.right_canvas.bbox("all")
+            ),
+        )
+        self.right_canvas.bind(
+            "<Configure>",
+            self._sync_right_width,
+        )
+        self._right_shell = right_shell
+        self.root.bind_all("<MouseWheel>", self._on_right_mousewheel)
+
         # Right-side metrics.
         rotation_card = self.card(
             right, "HEAD ROTATION",
             "Relative orientation (degrees)"
         )
-        rotation_card.pack(fill="x", pady=(0, 12))
+        rotation_card.pack(fill="x", pady=(0, 10))
 
         rotation_row = tk.Frame(rotation_card, bg=PANEL)
-        rotation_row.pack(fill="x", pady=(8, 4))
+        rotation_row.pack(fill="x", pady=(4, 0))
 
         self.yaw_label = self.metric(
             rotation_row, "YAW", ACCENT
@@ -289,10 +350,10 @@ class AuraHUD:
             right, "HEAD POSITION",
             "Relative to your calibrated neutral position"
         )
-        position_card.pack(fill="x", pady=(0, 12))
+        position_card.pack(fill="x", pady=(0, 10))
 
         position_row = tk.Frame(position_card, bg=PANEL)
-        position_row.pack(fill="x", pady=(5, 4))
+        position_row.pack(fill="x", pady=(4, 0))
 
         self.x_label = self.metric(
             position_row, "X", ACCENT
@@ -304,38 +365,37 @@ class AuraHUD:
             position_row, "Z", PURPLE
         )
 
-        # Two-dimensional live motion graph.
         graph_card = self.card(
             right, "MOVEMENT AXES",
             "Head movement relative to center"
         )
-        graph_card.pack(fill="x", pady=(0, 12))
+        graph_card.pack(fill="x", pady=(0, 10))
 
         self.axis_canvas = tk.Canvas(
             graph_card,
             bg="#0c1626",
-            height=145,
+            height=120,
             highlightthickness=0,
         )
-        self.axis_canvas.pack(fill="x", pady=(5, 0))
+        self.axis_canvas.pack(fill="x", pady=(4, 0))
+        self._axis_size = (0, 0)
         self.axis_canvas.bind(
             "<Configure>",
-            lambda event: self.draw_axes(),
+            self._on_axis_configure,
         )
 
-        # Blink indicator.
         blink_card = self.card(
             right,
             "EYE TRACKING",
             "Most recent blink — no history recorded",
         )
-        blink_card.pack(fill="x", pady=(0, 12))
+        blink_card.pack(fill="x", pady=(0, 8))
 
         latest_panel = tk.Frame(
             blink_card,
             bg=PANEL_2,
-            padx=16,
-            pady=10,
+            padx=14,
+            pady=8,
         )
         latest_panel.pack(fill="x")
 
@@ -352,12 +412,12 @@ class AuraHUD:
             text="Waiting for blink...",
             bg=PANEL_2,
             fg=TEXT,
-            font=("Segoe UI", 20, "bold"),
+            font=("Segoe UI", 16, "bold"),
         )
-        self.blink_label.pack(anchor="w", pady=(5, 0))
+        self.blink_label.pack(anchor="w", pady=(4, 0))
 
         indicators = tk.Frame(blink_card, bg=PANEL)
-        indicators.pack(fill="x", pady=(12, 0))
+        indicators.pack(fill="x", pady=(10, 0))
 
         self.eye_indicators = {}
 
@@ -371,8 +431,8 @@ class AuraHUD:
                 text=f"◉  {title}",
                 bg=PANEL_2,
                 fg=MUTED,
-                padx=12,
-                pady=10,
+                padx=10,
+                pady=8,
                 font=("Segoe UI", 10, "bold"),
             )
             indicator.pack(
@@ -383,14 +443,34 @@ class AuraHUD:
             )
             self.eye_indicators[key] = indicator
 
-        self.fps_label = tk.Label(
-            right,
-            text="FPS: --",
-            fg=MUTED,
-            bg=BG,
-            font=("Consolas", 10),
+    def _sync_right_width(self, event):
+        self.right_canvas.itemconfigure(
+            self.right_window,
+            width=max(event.width, 1),
         )
-        self.fps_label.pack(anchor="e", pady=5)
+
+    def _on_right_mousewheel(self, event):
+        if not self.right_canvas.winfo_exists():
+            return
+
+        widget = self.root.winfo_containing(
+            event.x_root, event.y_root
+        )
+        while widget is not None:
+            if widget == self._right_shell:
+                self.right_canvas.yview_scroll(
+                    int(-event.delta / 120),
+                    "units",
+                )
+                return
+            widget = widget.master if hasattr(widget, "master") else None
+
+    def _on_axis_configure(self, event):
+        size = (event.width, event.height)
+        if size == self._axis_size:
+            return
+        self._axis_size = size
+        self.draw_axes()
 
     # ----------------------------
     # CALIBRATION
@@ -789,13 +869,13 @@ class AuraHUD:
             text=f"FPS: {self.fps:.1f}"
         )
 
-        # Resize image to fit camera panel.
-        target_width = max(
-            self.camera_label.winfo_width(), 320
-        )
-        target_height = max(
-            self.camera_label.winfo_height(), 240
-        )
+        # Fit the frame inside the fixed video host, never the
+        # image label itself (that causes a resize feedback loop).
+        target_width = max(self.video_frame.winfo_width() - 4, 1)
+        target_height = max(self.video_frame.winfo_height() - 4, 1)
+        if target_width < 32 or target_height < 32:
+            self.root.after(50, self.update_frame)
+            return
 
         scale = min(
             target_width / width,
@@ -854,6 +934,10 @@ class AuraHUD:
 
     def close(self):
         self.running = False
+        try:
+            self.root.unbind_all("<MouseWheel>")
+        except tk.TclError:
+            pass
 
         if self.cap.isOpened():
             self.cap.release()
