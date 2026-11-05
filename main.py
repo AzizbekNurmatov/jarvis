@@ -73,8 +73,8 @@ class AuraHUD:
     def __init__(self, root):
         self.root = root
         self.root.title("AURA | Head Tracking HUD")
-        self.root.geometry("1460x920")
-        self.root.minsize(1180, 760)
+        self.root.geometry("1480x980")
+        self.root.minsize(1180, 820)
         self.root.configure(bg=BG)
 
         self.running = True
@@ -220,6 +220,15 @@ class AuraHUD:
         )
         self.status_label.pack(side="right")
 
+        self.header_gesture_label = tk.Label(
+            header,
+            text="GESTURE: —",
+            fg=MUTED,
+            bg=BG,
+            font=("Segoe UI", 10, "bold"),
+        )
+        self.header_gesture_label.pack(side="right", padx=(0, 18))
+
         body = tk.Frame(self.root, bg=BG, padx=22, pady=8)
         body.pack(fill="both", expand=True)
 
@@ -342,7 +351,8 @@ class AuraHUD:
         self._right_shell = right_shell
         self.root.bind_all("<MouseWheel>", self._on_right_mousewheel)
 
-        # Right-side metrics.
+        # Right-side metrics. Gesture + eyes are near the top
+        # so the new panels are visible without scrolling.
         rotation_card = self.card(
             right, "HEAD ROTATION",
             "Relative orientation (degrees)"
@@ -362,42 +372,59 @@ class AuraHUD:
             rotation_row, "ROLL", PURPLE
         )
 
-        position_card = self.card(
-            right, "HEAD POSITION",
-            "Relative to your calibrated neutral position"
+        gesture_card = self.card(
+            right,
+            "GESTURE RECOGNITION",
+            "One-shot events from blinks and head motion",
         )
-        position_card.pack(fill="x", pady=(0, 10))
+        gesture_card.pack(fill="x", pady=(0, 10))
 
-        position_row = tk.Frame(position_card, bg=PANEL)
-        position_row.pack(fill="x", pady=(4, 0))
+        gesture_panel = tk.Frame(
+            gesture_card,
+            bg=PANEL_2,
+            padx=14,
+            pady=10,
+        )
+        gesture_panel.pack(fill="x")
 
-        self.x_label = self.metric(
-            position_row, "X", ACCENT
-        )
-        self.y_label = self.metric(
-            position_row, "Y", GREEN
-        )
-        self.z_label = self.metric(
-            position_row, "Z", PURPLE
-        )
+        top_row = tk.Frame(gesture_panel, bg=PANEL_2)
+        top_row.pack(fill="x")
 
-        graph_card = self.card(
-            right, "MOVEMENT AXES",
-            "Head movement relative to center"
-        )
-        graph_card.pack(fill="x", pady=(0, 10))
+        tk.Label(
+            top_row,
+            text="LATEST GESTURE",
+            bg=PANEL_2,
+            fg=MUTED,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left")
 
-        self.axis_canvas = tk.Canvas(
-            graph_card,
-            bg="#0c1626",
-            height=120,
+        self.gesture_status_label = tk.Label(
+            top_row,
+            text="Ready",
+            bg=PANEL_2,
+            fg=GREEN,
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.gesture_status_label.pack(side="right")
+
+        self.gesture_label = tk.Label(
+            gesture_panel,
+            text="Waiting for gesture...",
+            bg=PANEL_2,
+            fg=TEXT,
+            font=("Segoe UI", 16, "bold"),
+        )
+        self.gesture_label.pack(anchor="w", pady=(6, 0))
+
+        self.gesture_flash = tk.Canvas(
+            gesture_card,
+            height=8,
+            bg=PANEL,
             highlightthickness=0,
         )
-        self.axis_canvas.pack(fill="x", pady=(4, 0))
-        self._axis_size = (0, 0)
-        self.axis_canvas.bind(
-            "<Configure>",
-            self._on_axis_configure,
+        self.gesture_flash.pack(fill="x", pady=(10, 0))
+        self._gesture_flash_bar = self.gesture_flash.create_rectangle(
+            0, 0, 0, 8, fill=ACCENT, outline=""
         )
 
         blink_card = self.card(
@@ -405,7 +432,7 @@ class AuraHUD:
             "EYE TRACKING",
             "Most recent blink — no history recorded",
         )
-        blink_card.pack(fill="x", pady=(0, 8))
+        blink_card.pack(fill="x", pady=(0, 10))
 
         latest_panel = tk.Frame(
             blink_card,
@@ -469,59 +496,42 @@ class AuraHUD:
             self._openness_meter(openness, "R OPEN")
         )
 
-        gesture_card = self.card(
-            right,
-            "GESTURE RECOGNITION",
-            "One-shot events from blinks and head motion",
+        position_card = self.card(
+            right, "HEAD POSITION",
+            "Relative to your calibrated neutral position"
         )
-        gesture_card.pack(fill="x", pady=(0, 8))
+        position_card.pack(fill="x", pady=(0, 10))
 
-        gesture_panel = tk.Frame(
-            gesture_card,
-            bg=PANEL_2,
-            padx=14,
-            pady=10,
+        position_row = tk.Frame(position_card, bg=PANEL)
+        position_row.pack(fill="x", pady=(4, 0))
+
+        self.x_label = self.metric(
+            position_row, "X", ACCENT
         )
-        gesture_panel.pack(fill="x")
-
-        top_row = tk.Frame(gesture_panel, bg=PANEL_2)
-        top_row.pack(fill="x")
-
-        tk.Label(
-            top_row,
-            text="LATEST GESTURE",
-            bg=PANEL_2,
-            fg=MUTED,
-            font=("Segoe UI", 9, "bold"),
-        ).pack(side="left")
-
-        self.gesture_status_label = tk.Label(
-            top_row,
-            text="Ready",
-            bg=PANEL_2,
-            fg=GREEN,
-            font=("Segoe UI", 9, "bold"),
+        self.y_label = self.metric(
+            position_row, "Y", GREEN
         )
-        self.gesture_status_label.pack(side="right")
-
-        self.gesture_label = tk.Label(
-            gesture_panel,
-            text="Waiting for gesture...",
-            bg=PANEL_2,
-            fg=TEXT,
-            font=("Segoe UI", 16, "bold"),
+        self.z_label = self.metric(
+            position_row, "Z", PURPLE
         )
-        self.gesture_label.pack(anchor="w", pady=(6, 0))
 
-        self.gesture_flash = tk.Canvas(
-            gesture_card,
-            height=8,
-            bg=PANEL,
+        graph_card = self.card(
+            right, "MOVEMENT AXES",
+            "Head movement relative to center"
+        )
+        graph_card.pack(fill="x", pady=(0, 8))
+
+        self.axis_canvas = tk.Canvas(
+            graph_card,
+            bg="#0c1626",
+            height=96,
             highlightthickness=0,
         )
-        self.gesture_flash.pack(fill="x", pady=(10, 0))
-        self._gesture_flash_bar = self.gesture_flash.create_rectangle(
-            0, 0, 0, 8, fill=ACCENT, outline=""
+        self.axis_canvas.pack(fill="x", pady=(4, 0))
+        self._axis_size = (0, 0)
+        self.axis_canvas.bind(
+            "<Configure>",
+            self._on_axis_configure,
         )
 
     def _openness_meter(self, parent, title):
@@ -761,9 +771,17 @@ class AuraHUD:
                 text="Waiting for gesture...",
                 fg=MUTED,
             )
+            self.header_gesture_label.config(
+                text="GESTURE: —",
+                fg=MUTED,
+            )
         else:
             self.gesture_label.config(
                 text=label,
+                fg=ACCENT,
+            )
+            self.header_gesture_label.config(
+                text=f"GESTURE: {label}",
                 fg=ACCENT,
             )
         self.render_gesture_status()
@@ -1153,6 +1171,8 @@ class AuraHUD:
 
 
 if __name__ == "__main__":
+    print("AURA starting with blink + gesture recognition enabled.")
+    print("Look for GESTURE RECOGNITION under HEAD ROTATION on the right.")
     root = tk.Tk()
     app = AuraHUD(root)
     root.mainloop()
