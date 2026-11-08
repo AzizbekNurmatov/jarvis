@@ -73,8 +73,8 @@ class AuraHUD:
     def __init__(self, root):
         self.root = root
         self.root.title("AURA | Head Tracking HUD")
-        self.root.geometry("1460x900")
-        self.root.minsize(1180, 760)
+        self.root.geometry("1480x900")
+        self.root.minsize(1200, 760)
         self.root.configure(bg=BG)
 
         self.running = True
@@ -234,15 +234,23 @@ class AuraHUD:
         body = tk.Frame(self.root, bg=BG, padx=16, pady=6)
         body.pack(fill="both", expand=True)
 
-        # Fixed-width metrics rail on the right; camera owns the rest.
-        right = tk.Frame(body, bg=BG, width=360)
-        right.pack(side="right", fill="y", padx=(10, 0))
-        right.pack_propagate(False)
-        right.grid_columnconfigure(0, weight=1)
-        right.grid_columnconfigure(1, weight=1)
+        # Hard split: camera column grows; sidebar never steals width.
+        # (pack_propagate alone was not reliable once metric cards got wide.)
+        self._sidebar_width = 360
+        body.grid_columnconfigure(0, weight=1, minsize=720)
+        body.grid_columnconfigure(1, weight=0)
+        body.grid_rowconfigure(0, weight=1)
 
         left = tk.Frame(body, bg=BG)
-        left.pack(side="left", fill="both", expand=True)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+
+        right = tk.Frame(body, bg=BG, width=self._sidebar_width)
+        right.grid(row=0, column=1, sticky="ns")
+        right.grid_propagate(False)
+        right.grid_columnconfigure(0, weight=1)
+        right.grid_columnconfigure(1, weight=1)
+        self._sidebar = right
+        body.bind("<Configure>", self._enforce_sidebar_width, add="+")
 
         # Camera preview.
         camera_card = self.card(
@@ -254,13 +262,16 @@ class AuraHUD:
         controls = tk.Frame(camera_card, bg=PANEL)
         controls.pack(side="bottom", fill="x", pady=(6, 0))
 
+        toggles = tk.Frame(controls, bg=PANEL)
+        toggles.pack(side="left", fill="x", expand=True)
+
         for text, variable in (
             ("Face Mesh", self.show_mesh),
             ("Pose Axes", self.show_axes),
             ("Hand Tracking", self.show_hands),
         ):
             tk.Checkbutton(
-                controls,
+                toggles,
                 text=text,
                 variable=variable,
                 command=(
@@ -300,8 +311,8 @@ class AuraHUD:
             text="Initializing camera...",
             fg=MUTED,
         )
-        # Fill the host completely — frame scaling crops to cover.
-        self.camera_label.place(x=0, y=0, relwidth=1, relheight=1)
+        # Centered contain-fit — never stretch or letterbox-crop the face away.
+        self.camera_label.place(relx=0.5, rely=0.5, anchor="center")
 
         # --- Compact right dashboard (no scroll at normal size) ---
         metrics_card = self.card(
@@ -469,6 +480,17 @@ class AuraHUD:
 
     def _on_hand_toggle(self):
         self.hand_tracker.set_enabled(self.show_hands.get())
+
+    def _enforce_sidebar_width(self, _event=None):
+        """Keep the metrics rail locked so the camera cannot collapse."""
+        if not hasattr(self, "_sidebar"):
+            return
+        try:
+            if int(self._sidebar.cget("width")) != self._sidebar_width:
+                self._sidebar.configure(width=self._sidebar_width)
+            self._sidebar.grid_propagate(False)
+        except tk.TclError:
+            pass
 
     def _on_axis_configure(self, event):
         size = (event.width, event.height)
@@ -978,19 +1000,20 @@ class AuraHUD:
             text=f"FPS: {self.fps:.1f}"
         )
 
-        # Cover-scale into the video host (crop edges, no letterbox).
-        # Size comes from the host frame, never the image label.
-        target_width = max(self.video_frame.winfo_width(), 1)
-        target_height = max(self.video_frame.winfo_height(), 1)
+        # Contain-fit inside the video host (preserve aspect, no stretch).
+        # Size comes from the host frame, never the image label — that
+        # feedback loop is what collapsed the camera column before.
+        target_width = max(self.video_frame.winfo_width() - 8, 1)
+        target_height = max(self.video_frame.winfo_height() - 8, 1)
         if target_width < 32 or target_height < 32:
             self.root.after(50, self.update_frame)
             return
 
-        scale = max(
+        scale = min(
             target_width / width,
             target_height / height,
         )
-        resized = cv2.resize(
+        display = cv2.resize(
             frame,
             (
                 max(1, int(width * scale)),
@@ -998,24 +1021,6 @@ class AuraHUD:
             ),
             interpolation=cv2.INTER_AREA,
         )
-        rh, rw = resized.shape[:2]
-        x0 = max(0, (rw - target_width) // 2)
-        y0 = max(0, (rh - target_height) // 2)
-        display = resized[
-            y0:y0 + target_height,
-            x0:x0 + target_width,
-        ]
-
-        # Guard against off-by-one crop sizes on odd dimensions.
-        if (
-            display.shape[1] != target_width
-            or display.shape[0] != target_height
-        ):
-            display = cv2.resize(
-                display,
-                (target_width, target_height),
-                interpolation=cv2.INTER_AREA,
-            )
 
         image = Image.fromarray(
             cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
