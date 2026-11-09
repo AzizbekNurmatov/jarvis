@@ -1,4 +1,4 @@
-# AURA — Spatial Tracking HUD
+# Jarvis — Spatial Tracking HUD
 
 A webcam desktop app for **head pose**, **blink / wink detection**, **basic gesture recognition**, and optional **hand landmark tracking**. Built with MediaPipe, OpenCV, and a Tkinter HUD.
 
