@@ -9,6 +9,10 @@ from PIL import Image, ImageTk
 
 from aura.core.blink import BlinkDetector
 from aura.core.gesture_engine import GestureEngine
+from aura.core.hand_gestures import (
+    HandGestureRecognizer,
+    draw_hand_gesture_overlay,
+)
 from aura.core.hand_tracking import HandTracker
 from aura.core.pose import wrap_angles
 
@@ -73,8 +77,8 @@ class AuraHUD:
     def __init__(self, root):
         self.root = root
         self.root.title("AURA | Head Tracking HUD")
-        self.root.geometry("1480x900")
-        self.root.minsize(1200, 760)
+        self.root.geometry("1480x940")
+        self.root.minsize(1200, 820)
         self.root.configure(bg=BG)
 
         self.running = True
@@ -97,10 +101,13 @@ class AuraHUD:
         self.blink_detector = BlinkDetector()
         self.gesture_engine = GestureEngine()
         self.hand_tracker = HandTracker(mirrored=True)
+        self.hand_gesture_recognizer = HandGestureRecognizer()
+        self.hand_gesture_snapshot = None
 
         self.show_mesh = tk.BooleanVar(value=False)
         self.show_axes = tk.BooleanVar(value=True)
         self.show_hands = tk.BooleanVar(value=False)
+        self.recognize_gestures = tk.BooleanVar(value=False)
 
         self.neutral_rotation = None
         self.neutral_position = None
@@ -249,13 +256,14 @@ class AuraHUD:
         right.grid_propagate(False)
         right.grid_columnconfigure(0, weight=1)
         right.grid_columnconfigure(1, weight=1)
+        right.grid_rowconfigure(2, weight=1)
         self._sidebar = right
         body.bind("<Configure>", self._enforce_sidebar_width, add="+")
 
         # Camera preview.
         camera_card = self.card(
             left, "LIVE CAMERA",
-            "Face / pose / eyes / optional hands"
+            "Face / pose / eyes / optional hands / gestures"
         )
         camera_card.pack(fill="both", expand=True)
 
@@ -265,20 +273,21 @@ class AuraHUD:
         toggles = tk.Frame(controls, bg=PANEL)
         toggles.pack(side="left", fill="x", expand=True)
 
-        for text, variable in (
-            ("Face Mesh", self.show_mesh),
-            ("Pose Axes", self.show_axes),
-            ("Hand Tracking", self.show_hands),
+        for text, variable, command in (
+            ("Face Mesh", self.show_mesh, None),
+            ("Pose Axes", self.show_axes, None),
+            ("Hand Tracking", self.show_hands, self._sync_hand_tracker),
+            (
+                "Gesture Recognition",
+                self.recognize_gestures,
+                self._on_gesture_toggle,
+            ),
         ):
             tk.Checkbutton(
                 toggles,
                 text=text,
                 variable=variable,
-                command=(
-                    self._on_hand_toggle
-                    if variable is self.show_hands
-                    else None
-                ),
+                command=command,
                 bg=PANEL, fg=TEXT,
                 selectcolor=PANEL_2,
                 activebackground=PANEL,
@@ -441,6 +450,125 @@ class AuraHUD:
         self._axis_size = (0, 0)
         self.axis_canvas.bind("<Configure>", self._on_axis_configure)
 
+        hand_g_card = self.card(right, "HAND GESTURE RECOGNITION")
+        hand_g_card.grid(
+            row=3, column=0, columnspan=2,
+            sticky="ew",
+        )
+
+        hand_g_panel = tk.Frame(hand_g_card, bg=PANEL_2, padx=10, pady=6)
+        hand_g_panel.pack(fill="x")
+
+        tk.Label(
+            hand_g_panel,
+            text="CURRENT GESTURE",
+            bg=PANEL_2,
+            fg=MUTED,
+            font=("Segoe UI", 8, "bold"),
+            anchor="w",
+        ).pack(fill="x")
+
+        self.hand_g_name = tk.Label(
+            hand_g_panel,
+            text="—",
+            bg=PANEL_2,
+            fg=MUTED,
+            font=("Segoe UI", 13, "bold"),
+            anchor="w",
+        )
+        self.hand_g_name.pack(fill="x", pady=(1, 4))
+
+        meta = tk.Frame(hand_g_panel, bg=PANEL_2)
+        meta.pack(fill="x")
+
+        tk.Label(
+            meta,
+            text="HAND",
+            bg=PANEL_2,
+            fg=MUTED,
+            font=("Segoe UI", 8, "bold"),
+        ).pack(side="left")
+
+        self.hand_g_hand = tk.Label(
+            meta,
+            text="—",
+            bg=PANEL_2,
+            fg=TEXT,
+            font=("Consolas", 10, "bold"),
+        )
+        self.hand_g_hand.pack(side="left", padx=(6, 16))
+
+        tk.Label(
+            meta,
+            text="STATUS",
+            bg=PANEL_2,
+            fg=MUTED,
+            font=("Segoe UI", 8, "bold"),
+        ).pack(side="left")
+
+        self.hand_g_status = tk.Label(
+            meta,
+            text="NO HAND",
+            bg=PANEL_2,
+            fg=MUTED,
+            font=("Segoe UI", 8, "bold"),
+        )
+        self.hand_g_status.pack(side="left", padx=(6, 0))
+
+        stab_row = tk.Frame(hand_g_panel, bg=PANEL_2)
+        stab_row.pack(fill="x", pady=(6, 0))
+
+        tk.Label(
+            stab_row,
+            text="STABILITY",
+            bg=PANEL_2,
+            fg=MUTED,
+            font=("Segoe UI", 8, "bold"),
+        ).pack(side="left")
+
+        self.hand_g_stab_bar = tk.Canvas(
+            stab_row,
+            height=8,
+            bg="#0c1626",
+            highlightthickness=0,
+        )
+        self.hand_g_stab_bar.pack(
+            side="left", fill="x", expand=True, padx=(8, 8)
+        )
+        self._hand_g_stab_rect = self.hand_g_stab_bar.create_rectangle(
+            0, 0, 0, 8, fill=ACCENT, outline=""
+        )
+
+        self.hand_g_stab_label = tk.Label(
+            stab_row,
+            text="—",
+            bg=PANEL_2,
+            fg=MUTED,
+            font=("Consolas", 8),
+            width=5,
+        )
+        self.hand_g_stab_label.pack(side="right")
+
+        tk.Label(
+            hand_g_panel,
+            text="RECENT",
+            bg=PANEL_2,
+            fg=MUTED,
+            font=("Segoe UI", 8, "bold"),
+            anchor="w",
+        ).pack(fill="x", pady=(6, 0))
+
+        self.hand_g_recent = tk.Label(
+            hand_g_panel,
+            text="—",
+            bg=PANEL_2,
+            fg=MUTED,
+            font=("Consolas", 8),
+            anchor="nw",
+            justify="left",
+        )
+        self.hand_g_recent.pack(fill="x")
+
     def _openness_meter(self, parent, title):
         wrap = tk.Frame(parent, bg=PANEL)
         wrap.pack(side="left", expand=True, fill="x", padx=3)
@@ -478,8 +606,22 @@ class AuraHUD:
         canvas._bar_id = bar
         return canvas, value
 
-    def _on_hand_toggle(self):
-        self.hand_tracker.set_enabled(self.show_hands.get())
+    def _hands_needed(self):
+        return bool(
+            self.show_hands.get() or self.recognize_gestures.get()
+        )
+
+    def _sync_hand_tracker(self):
+        needed = self._hands_needed()
+        if needed != self.hand_tracker.enabled:
+            self.hand_tracker.set_enabled(needed)
+
+    def _on_gesture_toggle(self):
+        if not self.recognize_gestures.get():
+            self.hand_gesture_recognizer.reset()
+            self.hand_gesture_snapshot = None
+            self.render_hand_gesture()
+        self._sync_hand_tracker()
 
     def _enforce_sidebar_width(self, _event=None):
         """Keep the metrics rail locked so the camera cannot collapse."""
@@ -709,6 +851,66 @@ class AuraHUD:
             fill=ACCENT if active else PANEL,
         )
 
+    def render_hand_gesture(self):
+        snapshot = self.hand_gesture_snapshot
+        if snapshot is None:
+            name, name_fg = "—", MUTED
+            hand_text = "—"
+            status, status_fg = "NO HAND", MUTED
+            agree, window = 0, 0
+            recent_text = "—"
+        else:
+            primary = snapshot.primary
+            status = primary.status
+            status_colors = {
+                "DETECTING": YELLOW,
+                "STABLE": GREEN,
+                "UNKNOWN": ORANGE,
+                "NO HAND": MUTED,
+            }
+            status_fg = status_colors.get(status, MUTED)
+            if primary.named:
+                name, name_fg = primary.label, ACCENT
+            elif primary.gesture == "UNKNOWN":
+                name, name_fg = "UNKNOWN", MUTED
+            else:
+                name, name_fg = "—", MUTED
+            hand_text = primary.hand or "—"
+            agree = primary.agree_count
+            window = primary.window_count
+            if snapshot.recent:
+                recent_text = "\n".join(
+                    f"{entry.hand:<5} {entry.label}"
+                    for entry in snapshot.recent[:5]
+                )
+            else:
+                recent_text = "—"
+
+        self.hand_g_name.config(text=name, fg=name_fg)
+        self.hand_g_hand.config(text=hand_text)
+        self.hand_g_status.config(text=status, fg=status_fg)
+        self.hand_g_recent.config(text=recent_text)
+
+        bar_width = max(self.hand_g_stab_bar.winfo_width(), 40)
+        ratio = (agree / window) if window else 0.0
+        fill = int(bar_width * ratio) if ratio else 0
+        if status == "STABLE":
+            color = GREEN
+        elif status == "DETECTING":
+            color = YELLOW
+        else:
+            color = "#35506e"
+        self.hand_g_stab_bar.coords(
+            self._hand_g_stab_rect, 0, 0, fill, 8
+        )
+        self.hand_g_stab_bar.itemconfigure(
+            self._hand_g_stab_rect, fill=color
+        )
+        if window:
+            self.hand_g_stab_label.config(text=f"{agree}/{window}")
+        else:
+            self.hand_g_stab_label.config(text="—")
+
     # ----------------------------
     # AXIS VISUALIZATION
     # ----------------------------
@@ -804,12 +1006,23 @@ class AuraHUD:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result = self.mesh.process(rgb)
 
-        hands_on = self.show_hands.get()
-        if hands_on != self.hand_tracker.enabled:
-            self.hand_tracker.set_enabled(hands_on)
-        if hands_on:
-            tracked_hands = self.hand_tracker.process(rgb)
+        # One Hands pass is shared by the skeleton overlay and
+        # gesture recognition so the two checkboxes never duplicate work.
+        need_hands = self.show_hands.get() or self.recognize_gestures.get()
+        if need_hands != self.hand_tracker.enabled:
+            self.hand_tracker.set_enabled(need_hands)
+        tracked_hands = (
+            self.hand_tracker.process(rgb) if need_hands else []
+        )
+        if self.show_hands.get():
             self.hand_tracker.draw(frame, tracked_hands)
+
+        if self.recognize_gestures.get():
+            snapshot = self.hand_gesture_recognizer.update(tracked_hands)
+            self.hand_gesture_snapshot = snapshot
+            for hand, gesture in zip(tracked_hands, snapshot.hands):
+                draw_hand_gesture_overlay(frame, hand, gesture)
+            self.render_hand_gesture()
 
         self.face_visible = bool(
             result.multi_face_landmarks
@@ -1075,7 +1288,10 @@ class AuraHUD:
 
 
 if __name__ == "__main__":
-    print("AURA starting — hand tracking is off until you enable the checkbox.")
+    print(
+        "AURA starting — enable Hand Tracking and/or Gesture Recognition "
+        "from the camera checkboxes."
+    )
     root = tk.Tk()
     app = AuraHUD(root)
     root.mainloop()
