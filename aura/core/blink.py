@@ -29,9 +29,19 @@ class BlinkDetector:
     Only the latest result is retained; no blink history.
     """
 
-    # Six landmarks around each eye.
+    # Six landmarks around each eye (EAR).
     LEFT_EYE = (362, 385, 387, 263, 373, 380)
     RIGHT_EYE = (33, 160, 158, 133, 153, 144)
+
+    # Full eyelid loops for the camera overlay (person's anatomical left/right).
+    LEFT_EYE_CONTOUR = (
+        362, 398, 384, 385, 386, 387, 388, 466, 263,
+        249, 390, 373, 374, 380, 381, 382,
+    )
+    RIGHT_EYE_CONTOUR = (
+        33, 246, 161, 160, 159, 158, 157, 173, 133,
+        155, 154, 153, 145, 144, 163, 7,
+    )
 
     def __init__(
         self,

@@ -106,6 +106,7 @@ class AuraHUD:
 
         self.show_mesh = tk.BooleanVar(value=False)
         self.show_axes = tk.BooleanVar(value=True)
+        self.show_eyes = tk.BooleanVar(value=True)
         self.show_hands = tk.BooleanVar(value=False)
         self.recognize_gestures = tk.BooleanVar(value=False)
 
@@ -276,6 +277,7 @@ class AuraHUD:
         for text, variable, command in (
             ("Face Mesh", self.show_mesh, None),
             ("Pose Axes", self.show_axes, None),
+            ("Eye Tracking", self.show_eyes, None),
             ("Hand Tracking", self.show_hands, self._sync_hand_tracker),
             (
                 "Gesture Recognition",
@@ -1108,37 +1110,38 @@ class AuraHUD:
                         -1,
                     )
 
-            # --- EYE MARKERS ---
-            for indices, closed, color in [
-                (
-                    BlinkDetector.LEFT_EYE,
-                    self.blink_result.left_closed,
-                    (80, 180, 255),
-                ),
-                (
-                    BlinkDetector.RIGHT_EYE,
-                    self.blink_result.right_closed,
-                    (190, 120, 255),
-                ),
-            ]:
-                points = np.array(
-                    [
-                        (
-                            int(landmarks[i].x * width),
-                            int(landmarks[i].y * height),
-                        )
-                        for i in indices
-                    ],
-                    dtype=np.int32,
-                )
+            # --- OPTIONAL EYE SOCKET BOUNDS ---
+            if self.show_eyes.get():
+                for indices, closed, color in [
+                    (
+                        BlinkDetector.LEFT_EYE_CONTOUR,
+                        self.blink_result.left_closed,
+                        (80, 180, 255),
+                    ),
+                    (
+                        BlinkDetector.RIGHT_EYE_CONTOUR,
+                        self.blink_result.right_closed,
+                        (190, 120, 255),
+                    ),
+                ]:
+                    points = np.array(
+                        [
+                            (
+                                int(landmarks[i].x * width),
+                                int(landmarks[i].y * height),
+                            )
+                            for i in indices
+                        ],
+                        dtype=np.int32,
+                    )
 
-                cv2.polylines(
-                    frame,
-                    [points],
-                    True,
-                    (50, 220, 90) if closed else color,
-                    2,
-                )
+                    cv2.polylines(
+                        frame,
+                        [points],
+                        True,
+                        (50, 220, 90) if closed else color,
+                        2,
+                    )
 
             # --- OPTIONAL POSE AXES ---
             if self.show_axes.get():
