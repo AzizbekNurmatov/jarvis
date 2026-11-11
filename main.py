@@ -14,7 +14,9 @@ from aura.core.hand_gestures import (
     draw_hand_gesture_overlay,
 )
 from aura.core.hand_tracking import HandTracker
+from aura.core.interaction import InteractionEngine, draw_index_pointer
 from aura.core.pose import wrap_angles
+from aura.hud.lab import InteractionLab
 
 
 # ----------------------------
@@ -103,6 +105,8 @@ class AuraHUD:
         self.hand_tracker = HandTracker(mirrored=True)
         self.hand_gesture_recognizer = HandGestureRecognizer()
         self.hand_gesture_snapshot = None
+        self.interaction_engine = InteractionEngine()
+        self._lab_on = False
 
         self.show_mesh = tk.BooleanVar(value=False)
         self.show_axes = tk.BooleanVar(value=True)
@@ -251,6 +255,7 @@ class AuraHUD:
 
         left = tk.Frame(body, bg=BG)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        self._left_column = left
 
         right = tk.Frame(body, bg=BG, width=self._sidebar_width)
         right.grid(row=0, column=1, sticky="ns")
@@ -296,6 +301,19 @@ class AuraHUD:
                 activeforeground=TEXT,
             ).pack(side="left", padx=4)
 
+        self.lab_button = tk.Button(
+            controls,
+            text="Interaction Lab",
+            command=self._toggle_interaction_lab,
+            bg=PANEL_2,
+            fg=TEXT,
+            relief="flat",
+            padx=12,
+            pady=5,
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.lab_button.pack(side="right", padx=4)
+
         tk.Button(
             controls,
             text="Calibrate Neutral",
@@ -324,6 +342,8 @@ class AuraHUD:
         )
         # Centered contain-fit — never stretch or letterbox-crop the face away.
         self.camera_label.place(relx=0.5, rely=0.5, anchor="center")
+
+        self.lab = InteractionLab(left)
 
         # --- Compact right dashboard (no scroll at normal size) ---
         metrics_card = self.card(
@@ -610,8 +630,24 @@ class AuraHUD:
 
     def _hands_needed(self):
         return bool(
-            self.show_hands.get() or self.recognize_gestures.get()
+            self.show_hands.get()
+            or self.recognize_gestures.get()
+            or self._lab_on
         )
+
+    def _toggle_interaction_lab(self):
+        self._lab_on = not self._lab_on
+        if self._lab_on:
+            self.lab.frame.pack(side="bottom", fill="x", pady=(8, 0))
+            self.lab.reset()
+            self.interaction_engine.reset()
+            self.lab_button.config(bg=GREEN, fg="#06101b")
+        else:
+            self.lab.frame.pack_forget()
+            self.lab.reset()
+            self.interaction_engine.reset()
+            self.lab_button.config(bg=PANEL_2, fg=TEXT)
+        self._sync_hand_tracker()
 
     def _sync_hand_tracker(self):
         needed = self._hands_needed()
@@ -1008,9 +1044,9 @@ class AuraHUD:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result = self.mesh.process(rgb)
 
-        # One Hands pass is shared by the skeleton overlay and
-        # gesture recognition so the two checkboxes never duplicate work.
-        need_hands = self.show_hands.get() or self.recognize_gestures.get()
+        # One Hands pass is shared by the skeleton overlay, gesture
+        # recognition, and Interaction Lab — never run a second detector.
+        need_hands = self._hands_needed()
         if need_hands != self.hand_tracker.enabled:
             self.hand_tracker.set_enabled(need_hands)
         tracked_hands = (
@@ -1025,6 +1061,11 @@ class AuraHUD:
             for hand, gesture in zip(tracked_hands, snapshot.hands):
                 draw_hand_gesture_overlay(frame, hand, gesture)
             self.render_hand_gesture()
+
+        if self._lab_on:
+            iframe = self.interaction_engine.update(tracked_hands)
+            self.lab.apply(iframe)
+            draw_index_pointer(frame, iframe)
 
         self.face_visible = bool(
             result.multi_face_landmarks
@@ -1292,8 +1333,8 @@ class AuraHUD:
 
 if __name__ == "__main__":
     print(
-        "AURA starting — enable Hand Tracking and/or Gesture Recognition "
-        "from the camera checkboxes."
+        "AURA starting — tracking overlays are in the camera checkboxes; "
+        "Interaction Lab is the button beside Calibrate Neutral."
     )
     root = tk.Tk()
     app = AuraHUD(root)
