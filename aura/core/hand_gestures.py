@@ -183,6 +183,65 @@ def _thumb_extended(pts: np.ndarray, scale: float) -> bool:
     return False
 
 
+# Screen-space pinch gap, normalized by palm size.
+# Capture is intentionally loose so a natural pinch (tips near, not kissing
+# and not locked in one orientation) still counts. Release is wider so a
+# hold can survive small tracking jitter while dragging.
+PINCH_CAPTURE = 0.50
+PINCH_RELEASE = 0.68
+
+
+def pinch_gap(landmarks: Optional[Sequence]) -> Optional[float]:
+    """
+    How close the thumb is to the index, relative to palm size.
+
+    Uses 2D tip and DIP distance so a pad-pinch or a slightly open pinch
+    still reads as contact. Returns None when landmarks are missing.
+    """
+    if landmarks is None or len(landmarks) < 21:
+        return None
+    pts = _as_points(landmarks)
+    scale = _hand_scale(pts)
+    thumb = pts[_THUMB_TIP]
+    gap = min(
+        _dist2(thumb, pts[_INDEX_TIP]),
+        _dist2(thumb, pts[_INDEX_DIP]),
+    )
+    return gap / scale
+
+
+def _fist_like_contact(pts: np.ndarray, scale: float) -> bool:
+    """Close tips bunched against the palm are a fist, not a pinch."""
+    index_span = _dist2(pts[_INDEX_MCP], pts[_INDEX_TIP]) / scale
+    from_palm = min(
+        _dist2(pts[_WRIST], pts[_THUMB_TIP]),
+        _dist2(pts[_WRIST], pts[_INDEX_TIP]),
+    ) / scale
+    pip_angle = _angle(pts[_INDEX_MCP], pts[_INDEX_PIP], pts[_INDEX_TIP])
+    index_folded = index_span <= 0.42 or pip_angle <= 118.0
+    return index_folded and from_palm <= 0.95
+
+
+def is_pinch_pose(landmarks: Optional[Sequence], holding: bool = False) -> bool:
+    """
+    Flexible pinch detector.
+
+    `holding=True` uses a wider release gap so Interaction Lab can keep a
+    grab while the fingers move a little. Fists are still rejected.
+    """
+    gap = pinch_gap(landmarks)
+    if gap is None:
+        return False
+    limit = PINCH_RELEASE if holding else PINCH_CAPTURE
+    if gap > limit:
+        return False
+    pts = _as_points(landmarks)
+    scale = _hand_scale(pts)
+    if _fist_like_contact(pts, scale):
+        return False
+    return True
+
+
 def _thumb_curled(pts: np.ndarray, scale: float) -> bool:
     abduct = _dist2(pts[_THUMB_TIP], pts[_MIDDLE_MCP]) / scale
     away_from_index = _dist2(pts[_THUMB_TIP], pts[_INDEX_MCP]) / scale
@@ -209,14 +268,6 @@ def classify_landmarks(landmarks: Optional[Sequence]) -> str:
     pts = _as_points(landmarks)
     scale = _hand_scale(pts)
 
-    # Prefer 3D so a 2D overlap (thumb in front of the index) is not a pinch.
-    pinch_dist = _dist(pts[_THUMB_TIP], pts[_INDEX_TIP]) / scale
-    # A real pinch meets in front of the palm; a fist bunches near the wrist.
-    pinch_from_palm = min(
-        _dist(pts[_WRIST], pts[_THUMB_TIP]),
-        _dist(pts[_WRIST], pts[_INDEX_TIP]),
-    ) / scale
-
     fingers = []
     for mcp, pip, _dip, tip in _FINGERS:
         extended = _finger_extended(pts, mcp, pip, tip, scale)
@@ -232,19 +283,9 @@ def classify_landmarks(landmarks: Optional[Sequence]) -> str:
     thumb_ext = _thumb_extended(pts, scale)
     thumb_curl = _thumb_curled(pts, scale)
 
-    # PINCH wins over POINTING / FIST. Distal tip contact is the discriminator
-    # so a bent-index pinch is not swallowed by a closed-hand pose.
-    # Fists bunch near ~1.0x palm from the wrist; pinches sit further out.
-    if pinch_dist <= 0.22 and pinch_from_palm >= 1.10:
-        return PINCH
-    if (
-        pinch_dist <= 0.30
-        and pinch_from_palm >= 1.25
-        and not four_ext
-        and middle_curl
-        and ring_curl
-        and pinky_curl
-    ):
+    # Pinch is checked first and no longer requires a single orientation,
+    # fully curled companion fingers, or near-perfect tip contact.
+    if is_pinch_pose(landmarks):
         return PINCH
 
     if four_ext and not thumb_curl:

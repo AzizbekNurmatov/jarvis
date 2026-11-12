@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, List, Optional, Sequence, Tuple
 import time
 
-from aura.core.hand_gestures import PINCH, classify_landmarks
+from aura.core.hand_gestures import is_pinch_pose
 
 
 CURSOR_MOVE = "CURSOR_MOVE"
@@ -78,8 +78,8 @@ def _hand_label(hand) -> str:
     return raw.upper() if raw else "RIGHT"
 
 
-def _is_pinch(landmarks: Sequence) -> bool:
-    return classify_landmarks(landmarks) == PINCH
+def _is_pinch(landmarks: Sequence, holding: bool = False) -> bool:
+    return is_pinch_pose(landmarks, holding=holding)
 
 
 class InteractionEngine:
@@ -141,7 +141,11 @@ class InteractionEngine:
 
         for hand in hands:
             landmarks = getattr(hand, "landmarks", None)
-            if landmarks is not None and _is_pinch(landmarks):
+            holding = (
+                self._pinching
+                and _hand_label(hand) == self._sticky_hand
+            )
+            if landmarks is not None and _is_pinch(landmarks, holding=holding):
                 return hand
 
         if "RIGHT" in by_label:
@@ -199,7 +203,10 @@ class InteractionEngine:
         self._last_hand = hand
         self._sticky_hand = hand
 
-        pinching_now = bool(landmarks is not None and _is_pinch(landmarks))
+        pinching_now = bool(
+            landmarks is not None
+            and _is_pinch(landmarks, holding=self._pinching)
+        )
         event_name = None
 
         if pinching_now:

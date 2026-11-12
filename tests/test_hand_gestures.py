@@ -21,6 +21,7 @@ from aura.core.hand_gestures import (
     UNKNOWN,
     HandGestureRecognizer,
     classify_landmarks,
+    is_pinch_pose,
 )
 
 
@@ -189,6 +190,41 @@ class ClassifyLandmarksTests(unittest.TestCase):
             thumb="extended",
             pinch=True,
         )
+        self.assertEqual(classify_landmarks(pose), PINCH)
+
+    def test_loose_pinch_still_counts(self):
+        pose = pinch()
+        pose[4].x += 0.04
+        pose[4].y += 0.03
+        self.assertEqual(classify_landmarks(pose), PINCH)
+
+    def test_pinch_with_other_fingers_open(self):
+        pose = make_hand(
+            index="extended",
+            middle="extended",
+            ring="curled",
+            pinky="curled",
+            thumb="extended",
+            pinch=True,
+        )
+        self.assertEqual(classify_landmarks(pose), PINCH)
+
+    def test_pinch_hold_allows_wider_gap(self):
+        pose = pinch()
+        pose[4].x += 0.13
+        self.assertFalse(is_pinch_pose(pose, holding=False))
+        self.assertTrue(is_pinch_pose(pose, holding=True))
+
+    def test_pad_pinch_on_index_dip(self):
+        pose = make_hand(
+            index="extended",
+            middle="curled",
+            ring="curled",
+            pinky="curled",
+            thumb="extended",
+        )
+        dip = pose[7]
+        pose[4].x, pose[4].y, pose[4].z = dip.x, dip.y, dip.z
         self.assertEqual(classify_landmarks(pose), PINCH)
 
     def test_left_and_right_same_pose(self):
