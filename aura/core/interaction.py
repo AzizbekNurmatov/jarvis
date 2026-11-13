@@ -86,9 +86,8 @@ class InteractionEngine:
     """
     Turns existing Hands landmarks into cursor / pinch events.
 
-    Does not draw, click, or send OS input. A destination layer consumes
-    the events. `destinations` is reserved so OS and TARS can subscribe
-    later without changing this engine.
+    Does not draw, click, or send OS input. Callers fan the same
+    InteractionFrame out to HUD, Desktop Control, and later TARS.
     """
 
     def __init__(
@@ -118,9 +117,7 @@ class InteractionEngine:
         self._sticky_hand = ""
         self._last_hand = ""
 
-    def _emit(self, name: str, x: float, y: float, hand: str, now: float) -> Optional[InteractionEvent]:
-        if DEST_HUD not in self.destinations:
-            return None
+    def _emit(self, name: str, x: float, y: float, hand: str, now: float) -> InteractionEvent:
         return InteractionEvent(
             name=name,
             x=x,
@@ -228,13 +225,9 @@ class InteractionEngine:
             else:
                 self._pinch_off = 0
 
-        move = self._emit(CURSOR_MOVE, x, y, hand, now)
-        if move is not None:
-            events.append(move)
+        events.append(self._emit(CURSOR_MOVE, x, y, hand, now))
         if event_name is not None:
-            pinch_event = self._emit(event_name, x, y, hand, now)
-            if pinch_event is not None:
-                events.append(pinch_event)
+            events.append(self._emit(event_name, x, y, hand, now))
 
         return InteractionFrame(
             cursor_x=x,

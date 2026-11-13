@@ -14,8 +14,10 @@ from aura.core.hand_gestures import (
     draw_hand_gesture_overlay,
 )
 from aura.core.hand_tracking import HandTracker
+from aura.core.desktop import DesktopController
 from aura.core.interaction import InteractionEngine, draw_index_pointer
 from aura.core.pose import wrap_angles
+from aura.hud.desktop_panel import DesktopPanel
 from aura.hud.lab import InteractionLab
 
 
@@ -106,7 +108,11 @@ class AuraHUD:
         self.hand_gesture_recognizer = HandGestureRecognizer()
         self.hand_gesture_snapshot = None
         self.interaction_engine = InteractionEngine()
+        self.desktop = DesktopController(
+            on_stop=self._on_desktop_stopped,
+        )
         self._lab_on = False
+        self._desktop_on = False
 
         self.show_mesh = tk.BooleanVar(value=False)
         self.show_axes = tk.BooleanVar(value=True)
@@ -136,6 +142,7 @@ class AuraHUD:
 
         self.build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self.root.bind_all("<Escape>", self._desktop_emergency_stop)
         self.update_frame()
 
     # ----------------------------
@@ -301,6 +308,19 @@ class AuraHUD:
                 activeforeground=TEXT,
             ).pack(side="left", padx=4)
 
+        self.desktop_button = tk.Button(
+            controls,
+            text="Desktop Control",
+            command=self._toggle_desktop_control,
+            bg=PANEL_2,
+            fg=TEXT,
+            relief="flat",
+            padx=12,
+            pady=5,
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.desktop_button.pack(side="right", padx=4)
+
         self.lab_button = tk.Button(
             controls,
             text="Interaction Lab",
@@ -344,6 +364,9 @@ class AuraHUD:
         self.camera_label.place(relx=0.5, rely=0.5, anchor="center")
 
         self.lab = InteractionLab(left)
+        self.desktop_panel = DesktopPanel(
+            left, on_sensitivity=self._set_desktop_sensitivity
+        )
 
         # --- Compact right dashboard (no scroll at normal size) ---
         metrics_card = self.card(
@@ -633,21 +656,65 @@ class AuraHUD:
             self.show_hands.get()
             or self.recognize_gestures.get()
             or self._lab_on
+            or self._desktop_on
         )
+
+    def _interaction_needed(self):
+        return bool(self._lab_on or self._desktop_on)
+
+    def _maybe_reset_engine(self):
+        if not self._interaction_needed():
+            self.interaction_engine.reset()
 
     def _toggle_interaction_lab(self):
         self._lab_on = not self._lab_on
         if self._lab_on:
             self.lab.frame.pack(side="bottom", fill="x", pady=(8, 0))
             self.lab.reset()
-            self.interaction_engine.reset()
             self.lab_button.config(bg=GREEN, fg="#06101b")
         else:
             self.lab.frame.pack_forget()
             self.lab.reset()
-            self.interaction_engine.reset()
             self.lab_button.config(bg=PANEL_2, fg=TEXT)
+        self._maybe_reset_engine()
         self._sync_hand_tracker()
+
+    def _set_desktop_sensitivity(self, value):
+        self.desktop.sensitivity = float(value)
+
+    def _show_desktop_ui(self):
+        self._desktop_on = True
+        self.desktop_panel.frame.pack(side="bottom", fill="x", pady=(8, 0))
+        self.desktop_button.config(bg=ORANGE, fg="#06101b")
+        self.desktop_panel.render(self.desktop.diagnostics())
+
+    def _hide_desktop_ui(self):
+        self._desktop_on = False
+        self.desktop_panel.frame.pack_forget()
+        self.desktop_button.config(bg=PANEL_2, fg=TEXT)
+
+    def _toggle_desktop_control(self):
+        if self._desktop_on:
+            self.desktop.disable(reason="DISABLED")
+            return
+        self.desktop.enable()
+        self._show_desktop_ui()
+        self._sync_hand_tracker()
+
+    def _on_desktop_stopped(self, reason):
+        self._hide_desktop_ui()
+        self._maybe_reset_engine()
+        self._sync_hand_tracker()
+        if reason and reason != "DISABLED":
+            self.status_label.config(
+                text=f"● {reason}",
+                fg=ORANGE,
+            )
+
+    def _desktop_emergency_stop(self, _event=None):
+        if self.desktop.enabled or self._desktop_on:
+            self.desktop.emergency_stop()
+        return "break"
 
     def _sync_hand_tracker(self):
         needed = self._hands_needed()
@@ -1044,8 +1111,7 @@ class AuraHUD:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result = self.mesh.process(rgb)
 
-        # One Hands pass is shared by the skeleton overlay, gesture
-        # recognition, and Interaction Lab — never run a second detector.
+        # One Hands pass is shared by overlay, gestures, lab, and desktop.
         need_hands = self._hands_needed()
         if need_hands != self.hand_tracker.enabled:
             self.hand_tracker.set_enabled(need_hands)
@@ -1062,9 +1128,13 @@ class AuraHUD:
                 draw_hand_gesture_overlay(frame, hand, gesture)
             self.render_hand_gesture()
 
-        if self._lab_on:
+        if self._interaction_needed():
             iframe = self.interaction_engine.update(tracked_hands)
-            self.lab.apply(iframe)
+            if self._lab_on:
+                self.lab.apply(iframe)
+            if self._desktop_on:
+                self.desktop.apply(iframe, fps=self.fps)
+                self.desktop_panel.render(self.desktop.diagnostics())
             draw_index_pointer(frame, iframe)
 
         self.face_visible = bool(
@@ -1322,6 +1392,10 @@ class AuraHUD:
 
     def close(self):
         self.running = False
+        try:
+            self.desktop.disable(reason="CLOSED", notify=False)
+        except Exception:
+            pass
 
         if self.cap.isOpened():
             self.cap.release()
@@ -1333,8 +1407,8 @@ class AuraHUD:
 
 if __name__ == "__main__":
     print(
-        "AURA starting — tracking overlays are in the camera checkboxes; "
-        "Interaction Lab is the button beside Calibrate Neutral."
+        "AURA starting — Desktop Control is off. Enable it from the camera "
+        "bar; press Esc to stop immediately."
     )
     root = tk.Tk()
     app = AuraHUD(root)
