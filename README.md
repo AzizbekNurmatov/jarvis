@@ -12,7 +12,7 @@ A webcam desktop app for **head pose**, **blink / wink detection**, **hand gestu
 - One-shot head / eye gestures: winks, blink, double blink, nod, shake, turn left / right
 - Optional MediaPipe Hands overlay (21 landmarks + skeleton, up to two hands)
 - Rule-based hand gestures: open palm, fist, pointing, peace sign, pinch
-- Interaction Lab: index-finger cursor, pinch-to-click, pinch-and-drag
+- Interaction Lab: index-finger cursor, fist-to-click, fist-and-drag
 - Desktop Control (off by default): move / click / drag the Windows cursor with your hand
 - Compact dark dashboard with FPS and live gesture status in the header
 
@@ -59,7 +59,7 @@ python3.11 -m venv .venv
 | **Eye Tracking** | Toggle eyelid / eye-socket bounds on the preview (blink detection still runs either way) |
 | **Hand Tracking** | Toggle the hand skeleton overlay |
 | **Gesture Recognition** | Toggle the hand-gesture HUD panel and camera labels |
-| **Interaction Lab** | Show the pinch-driven lab canvas under the camera |
+| **Interaction Lab** | Show the fist-driven lab canvas under the camera |
 | **Desktop Control** | Move the Windows cursor with your index finger (off by default) |
 
 Close the window to quit. The app releases the camera, any hand model, and a held mouse button on exit.
@@ -93,15 +93,15 @@ Enable **Gesture Recognition**. Poses are classified from the existing 21 hand l
 | Peace sign | Index and middle extended, ring and pinky curled |
 | Pinch | Thumb near the index tip or last index joint |
 
-Unmatched poses show `UNKNOWN`. No hand shows `NO HAND`. Left and right hands are tracked separately. Pinch is intentionally a bit loose so a natural grip still counts; a closed fist is not treated as a pinch.
+Unmatched poses show `UNKNOWN`. No hand shows `NO HAND`. Left and right hands are tracked separately. Pinch is still classified in the HUD; **Interaction Lab** and **Desktop Control** grab with a **fist**.
 
 ### Interaction Lab
 
 Click **Interaction Lab** (the button turns green). An index-finger cursor appears on the lab canvas:
 
-- **NODE** — pinch and drag, then release
-- **CLICK** — one count per pinch (holding does not repeat)
-- **LEVEL** — pinch the slider and drag sideways
+- **NODE** — make a fist and drag, then open the hand to release
+- **CLICK** — one count per fist (holding does not repeat)
+- **LEVEL** — fist the slider and drag sideways
 
 You do not need the Hand Tracking or Gesture Recognition checkboxes for the lab. Turning **Hand Tracking** on is useful so you can see the skeleton while aiming.
 
@@ -111,12 +111,12 @@ You do not need the Hand Tracking or Gesture Recognition checkboxes for the lab.
 
 1. Park the pointer somewhere harmless (empty desktop).
 2. Click **Desktop Control** (the button turns orange). Keep a finger near **Esc**.
-3. Index finger aims the cursor. Short pinch = click. Hold pinch (~0.24s) = drag.
+3. Index finger aims the cursor. Short fist = click. Hold fist (~0.24s) = drag.
 4. Press **Esc** to stop immediately. The held mouse button is always released.
 
 Also disengages if the hand leaves the frame for about a second, if you toggle the mode off, if an error occurs, or when AURA exits.
 
-While it is on, AURA drives the cursor every frame and will fight a physical mouse. Use **Esc** rather than trying to pinch-click the orange button. A slim strip shows FPS, interaction latency, status (`AIMING` / `PINCH` / `DRAG` / `LOST`), and a sensitivity slider.
+While it is on, AURA drives the cursor every frame and will fight a physical mouse. Use **Esc** rather than trying to fist-click the orange button. A slim strip shows FPS, interaction latency, status (`AIMING` / `FIST` / `DRAG` / `LOST`), and a sensitivity slider.
 
 Desktop Control is Windows-only. macOS / Linux still run tracking, gestures, and the Interaction Lab.
 
@@ -187,7 +187,8 @@ Tests cover blink classification, head gestures, hand poses, pinch hysteresis, I
 - **Black or frozen preview:** Unplug/replug the camera, lower `CAMERA_WIDTH` / `CAMERA_HEIGHT`, or try another index.
 - **Low FPS (~15 or below):** Lower camera resolution, disable Hands-related modes when you do not need them, close other webcam apps, and use good lighting.
 - **Hands not appearing:** Enable **Hand Tracking**, **Gesture Recognition**, **Interaction Lab**, or **Desktop Control**, and keep hands clearly in frame with decent light.
-- **Pinch not registering:** Bring thumb and index close (a pad pinch counts). Face the palm somewhat toward the camera. A tight fist is ignored on purpose.
+- **Fist not grabbing in the lab / desktop:** Close all four fingers. Aim with a pointed index first, then fist; the cursor stays on the aim point instead of jumping to the knuckles.
+- **Pinch not showing in the gesture panel:** Bring thumb and index close (a pad pinch still counts). A tight fist is classified as FIST, not PINCH.
 - **Desktop cursor fighting the mouse:** Press **Esc**, or wait for the hand to leave the frame. Desktop Control must be enabled explicitly each session.
 - **Winks registering as both eyes:** Recalibrate, face the camera squarely, and blink a bit more deliberately with the other eye open.
 - **Installation fails:** Confirm Python 3.11 is **64-bit**, then run the terminal setup commands to see pip errors.

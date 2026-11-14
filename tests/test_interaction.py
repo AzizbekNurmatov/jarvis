@@ -1,4 +1,4 @@
-"""Interaction engine cursor + pinch event tests (no camera / Tk required)."""
+"""Interaction engine cursor + fist event tests (no camera / Tk required)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from aura.core.interaction import (
     PINCH_START,
     InteractionEngine,
 )
-from tests.test_hand_gestures import hand_obj, open_palm, pinch, pointing
+from tests.test_hand_gestures import fist, hand_obj, open_palm, pointing
 
 
 def _events(frame, name):
@@ -55,17 +55,17 @@ class InteractionEngineTests(unittest.TestCase):
         self.assertGreater(second.cursor_x, x0)
         self.assertLess(second.cursor_x, target.cursor_x)
 
-    def test_pinch_start_hold_end(self):
+    def test_fist_start_hold_end(self):
         self.engine.update([hand_obj(pointing(), "Right")], now=1.00)
-        first = self.engine.update([hand_obj(pinch(), "Right")], now=1.05)
+        first = self.engine.update([hand_obj(fist(), "Right")], now=1.05)
         self.assertEqual(_events(first, PINCH_START), [])
         self.assertFalse(first.pinching)
 
-        started = self.engine.update([hand_obj(pinch(), "Right")], now=1.12)
+        started = self.engine.update([hand_obj(fist(), "Right")], now=1.12)
         self.assertEqual(len(_events(started, PINCH_START)), 1)
         self.assertTrue(started.pinching)
 
-        held = self.engine.update([hand_obj(pinch(), "Right")], now=1.20)
+        held = self.engine.update([hand_obj(fist(), "Right")], now=1.20)
         self.assertEqual(len(_events(held, PINCH_HOLD)), 1)
         self.assertEqual(_events(held, PINCH_START), [])
 
@@ -74,21 +74,21 @@ class InteractionEngineTests(unittest.TestCase):
         self.assertEqual(len(_events(ended, PINCH_END)), 1)
         self.assertFalse(ended.pinching)
 
-    def test_lost_hand_cancels_pinch(self):
-        self.engine.update([hand_obj(pinch(), "Right")], now=2.00)
-        self.engine.update([hand_obj(pinch(), "Right")], now=2.10)
+    def test_lost_hand_cancels_fist(self):
+        self.engine.update([hand_obj(fist(), "Right")], now=2.00)
+        self.engine.update([hand_obj(fist(), "Right")], now=2.10)
         lost = self.engine.update([], now=2.20)
         self.assertFalse(lost.visible)
         self.assertEqual(len(_events(lost, PINCH_END)), 1)
 
-    def test_pinch_does_not_retrigger_while_held(self):
-        self.engine.update([hand_obj(pinch(), "Left")], now=3.00)
-        self.engine.update([hand_obj(pinch(), "Left")], now=3.08)
+    def test_fist_does_not_retrigger_while_held(self):
+        self.engine.update([hand_obj(fist(), "Left")], now=3.00)
+        self.engine.update([hand_obj(fist(), "Left")], now=3.08)
         starts = 0
         holds = 0
         for i in range(5):
             frame = self.engine.update(
-                [hand_obj(pinch(), "Left")], now=3.16 + i * 0.08
+                [hand_obj(fist(), "Left")], now=3.16 + i * 0.08
             )
             starts += len(_events(frame, PINCH_START))
             holds += len(_events(frame, PINCH_HOLD))
@@ -96,8 +96,8 @@ class InteractionEngineTests(unittest.TestCase):
         self.assertEqual(holds, 5)
 
     def test_reset_clears_state(self):
-        self.engine.update([hand_obj(pinch(), "Right")], now=4.00)
-        self.engine.update([hand_obj(pinch(), "Right")], now=4.10)
+        self.engine.update([hand_obj(fist(), "Right")], now=4.00)
+        self.engine.update([hand_obj(fist(), "Right")], now=4.10)
         self.engine.reset()
         frame = self.engine.update([], now=4.20)
         self.assertEqual(frame.events, [])

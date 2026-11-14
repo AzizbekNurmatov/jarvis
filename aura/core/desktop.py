@@ -134,8 +134,8 @@ class DesktopController:
     """
     Maps fingertip + pinch events onto the Windows cursor.
 
-    Click: short pinch, mouse down/up on release.
-    Drag: pinch held past drag_arm_s, then move with button down.
+    Click: short fist, mouse down/up on release.
+    Drag: fist held past drag_arm_s, then move with button down.
 
     Always releases the held button on disable, lost tracking, or error.
     """
@@ -291,6 +291,6 @@ class DesktopController:
         if self._dragging:
             self.status = "DRAG"
         elif iframe.pinching:
-            self.status = "PINCH"
+            self.status = "FIST"
         else:
             self.status = "AIMING"

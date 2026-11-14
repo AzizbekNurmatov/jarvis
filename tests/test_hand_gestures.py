@@ -21,6 +21,7 @@ from aura.core.hand_gestures import (
     UNKNOWN,
     HandGestureRecognizer,
     classify_landmarks,
+    is_fist_pose,
     is_pinch_pose,
 )
 
@@ -159,6 +160,10 @@ class ClassifyLandmarksTests(unittest.TestCase):
 
     def test_fist(self):
         self.assertEqual(classify_landmarks(fist()), FIST)
+        self.assertTrue(is_fist_pose(fist()))
+        self.assertFalse(is_fist_pose(open_palm()))
+        self.assertFalse(is_fist_pose(pinch()))
+        self.assertFalse(is_fist_pose(pointing()))
 
     def test_pointing(self):
         self.assertEqual(classify_landmarks(pointing()), POINTING)

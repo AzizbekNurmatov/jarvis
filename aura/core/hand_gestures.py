@@ -222,12 +222,30 @@ def _fist_like_contact(pts: np.ndarray, scale: float) -> bool:
     return index_folded and from_palm <= 0.95
 
 
+def is_fist_pose(landmarks: Optional[Sequence], holding: bool = False) -> bool:
+    """
+    Closed-hand detector for Interaction Lab and Desktop Control.
+
+    Capture requires a classified FIST. While holding, a brief UNKNOWN
+    flicker still counts so a grab does not drop from tracking noise.
+    Open poses (palm, point, peace, pinch) always release.
+    """
+    if landmarks is None or len(landmarks) < 21:
+        return False
+    name = classify_landmarks(landmarks)
+    if name == FIST:
+        return True
+    if holding and name == UNKNOWN:
+        return True
+    return False
+
+
 def is_pinch_pose(landmarks: Optional[Sequence], holding: bool = False) -> bool:
     """
     Flexible pinch detector.
 
-    `holding=True` uses a wider release gap so Interaction Lab can keep a
-    grab while the fingers move a little. Fists are still rejected.
+    `holding=True` uses a wider release gap so a pinch hold can survive
+    small tracking jitter. Fists are still rejected.
     """
     gap = pinch_gap(landmarks)
     if gap is None:

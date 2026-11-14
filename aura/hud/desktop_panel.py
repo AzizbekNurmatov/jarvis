@@ -117,7 +117,7 @@ class DesktopPanel:
 
         self.hint = tk.Label(
             self.frame,
-            text="Index finger moves the Windows cursor  ·  Short pinch = click  ·  Hold pinch = drag",
+            text="Index finger moves the Windows cursor  ·  Short fist = click  ·  Hold fist = drag",
             fg=MUTED,
             bg=PANEL,
             font=("Segoe UI", 8),
@@ -135,6 +135,7 @@ class DesktopPanel:
         colors = {
             "OFF": MUTED,
             "AIMING": ACCENT,
+            "FIST": YELLOW,
             "PINCH": YELLOW,
             "DRAG": GREEN,
             "LOST": ORANGE,

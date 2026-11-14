@@ -58,7 +58,7 @@ class InteractionLab:
 
         tk.Label(
             header,
-            text="Index finger aims  ·  Pinch to grab / click",
+            text="Index finger aims  ·  Fist to grab / click",
             fg=MUTED,
             bg=PANEL,
             font=("Segoe UI", 8),
@@ -132,7 +132,7 @@ class InteractionLab:
             font=("Segoe UI", 11, "bold"), tags="card",
         )
         self._ids["card_sub"] = c.create_text(
-            0, 0, text="Pinch and drag", fill=MUTED,
+            0, 0, text="Fist and drag", fill=MUTED,
             font=("Segoe UI", 8), tags="card",
         )
 
@@ -278,7 +278,7 @@ class InteractionLab:
             label = "DRAGGING NODE" if self._grab["kind"] == "card" else "ADJUSTING SLIDER"
             color = GREEN
         elif pinching:
-            label = "PINCH"
+            label = "FIST"
             color = GREEN
         elif self._hover == "button":
             label = "HOVER BUTTON"

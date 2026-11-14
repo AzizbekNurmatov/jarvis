@@ -1,6 +1,6 @@
 """Hand-driven interaction events for AURA's HUD (and later OS / TARS).
 
-Cursor + pinch state live here. Tkinter widgets, Windows input, and TARS
+Cursor + fist-grab state live here. Tkinter widgets, Windows input, and TARS
 commands are destinations — only the HUD destination is implemented.
 """
 
@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, List, Optional, Sequence, Tuple
 import time
 
-from aura.core.hand_gestures import is_pinch_pose
+from aura.core.hand_gestures import is_fist_pose
 
 
 CURSOR_MOVE = "CURSOR_MOVE"
@@ -23,6 +23,7 @@ DEST_OS = "OS"
 DEST_TARS = "TARS"
 
 INDEX_TIP = 8
+_PALM = (0, 5, 9, 13, 17)
 
 # Inset so the user does not have to reach the camera corners.
 _EDGE = 0.10
@@ -78,13 +79,26 @@ def _hand_label(hand) -> str:
     return raw.upper() if raw else "RIGHT"
 
 
-def _is_pinch(landmarks: Sequence, holding: bool = False) -> bool:
-    return is_pinch_pose(landmarks, holding=holding)
+def _palm_xy(landmarks: Sequence) -> Optional[Tuple[float, float]]:
+    if landmarks is None or len(landmarks) < 18:
+        return None
+    xs = 0.0
+    ys = 0.0
+    for index in _PALM:
+        pt = landmarks[index]
+        xs += float(pt.x)
+        ys += float(pt.y)
+    n = float(len(_PALM))
+    return xs / n, ys / n
+
+
+def _is_grab(landmarks: Sequence, holding: bool = False) -> bool:
+    return is_fist_pose(landmarks, holding=holding)
 
 
 class InteractionEngine:
     """
-    Turns existing Hands landmarks into cursor / pinch events.
+    Turns existing Hands landmarks into cursor / fist-grab events.
 
     Does not draw, click, or send OS input. Callers fan the same
     InteractionFrame out to HUD, Desktop Control, and later TARS.
@@ -108,6 +122,7 @@ class InteractionEngine:
         self._pinch_off = 0
         self._sticky_hand = ""
         self._last_hand = ""
+        self._fist_offset: Optional[Tuple[float, float]] = None
 
     def reset(self) -> None:
         self._cursor = None
@@ -116,6 +131,7 @@ class InteractionEngine:
         self._pinch_off = 0
         self._sticky_hand = ""
         self._last_hand = ""
+        self._fist_offset = None
 
     def _emit(self, name: str, x: float, y: float, hand: str, now: float) -> InteractionEvent:
         return InteractionEvent(
@@ -142,7 +158,7 @@ class InteractionEngine:
                 self._pinching
                 and _hand_label(hand) == self._sticky_hand
             )
-            if landmarks is not None and _is_pinch(landmarks, holding=holding):
+            if landmarks is not None and _is_grab(landmarks, holding=holding):
                 return hand
 
         if "RIGHT" in by_label:
@@ -194,16 +210,32 @@ class InteractionEngine:
             self.reset()
             return InteractionFrame()
 
-        raw_x, raw_y = _map_point(tip[0], tip[1])
+        mapped_tip = _map_point(tip[0], tip[1])
+        palm = _palm_xy(landmarks) if landmarks is not None else None
+        mapped_palm = _map_point(palm[0], palm[1]) if palm is not None else mapped_tip
+
+        grab_now = bool(
+            landmarks is not None
+            and _is_grab(landmarks, holding=self._pinching)
+        )
+        # Aim with the index tip; while the fist is closed, follow the palm
+        # so the cursor does not jump into the knuckles.
+        if grab_now or self._pinching:
+            if self._fist_offset is None:
+                cx, cy = self._cursor if self._cursor is not None else mapped_tip
+                self._fist_offset = (cx - mapped_palm[0], cy - mapped_palm[1])
+            raw_x = _clamp01(mapped_palm[0] + self._fist_offset[0])
+            raw_y = _clamp01(mapped_palm[1] + self._fist_offset[1])
+        else:
+            self._fist_offset = None
+            raw_x, raw_y = mapped_tip
+
         x, y = self._smooth(raw_x, raw_y)
         hand = _hand_label(chosen)
         self._last_hand = hand
         self._sticky_hand = hand
 
-        pinching_now = bool(
-            landmarks is not None
-            and _is_pinch(landmarks, holding=self._pinching)
-        )
+        pinching_now = grab_now
         event_name = None
 
         if pinching_now:
