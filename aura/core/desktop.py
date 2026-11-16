@@ -8,9 +8,11 @@ to OS input so TARS can subscribe the same way later.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple
+import math
 import sys
+import threading
 import time
+from typing import Callable, List, Optional, Tuple
 
 from aura.core.interaction import (
     PINCH_END,
@@ -119,6 +121,46 @@ def default_mouse() -> MouseBackend:
     return NullMouse()
 
 
+# Short follow so camera-rate steps become a continuous cursor without
+# a visible trail. Lead is one video frame of velocity at most, and only
+# while the hand is actually moving, so a stop does not coast onward.
+_GLIDE_TAU_S = 0.010
+_GLIDE_LEAD_S = 0.010
+_GLIDE_HZ = 120.0
+
+
+def glide_step(
+    shown: Tuple[float, float],
+    target: Tuple[float, float],
+    velocity: Tuple[float, float],
+    dt: float,
+    tau: float = _GLIDE_TAU_S,
+    lead: float = _GLIDE_LEAD_S,
+) -> Tuple[float, float]:
+    """Ease the drawn pointer toward the latest fingertip sample.
+
+    `lead` seconds of the current velocity cancel the easer's lag while
+    speed is steady, so the cursor stays on the hand instead of behind it.
+    """
+    dt = dt if dt > 0.0 else 0.0
+    if dt <= 0.0:
+        return shown
+
+    aim_x = target[0] + velocity[0] * lead
+    aim_y = target[1] + velocity[1] * lead
+    aim_x = 0.0 if aim_x < 0.0 else 1.0 if aim_x > 1.0 else aim_x
+    aim_y = 0.0 if aim_y < 0.0 else 1.0 if aim_y > 1.0 else aim_y
+
+    if abs(aim_x - shown[0]) < 8e-4 and abs(aim_y - shown[1]) < 8e-4:
+        return aim_x, aim_y
+
+    alpha = 1.0 - math.exp(-dt / tau) if tau > 1e-6 else 1.0
+    return (
+        shown[0] + (aim_x - shown[0]) * alpha,
+        shown[1] + (aim_y - shown[1]) * alpha,
+    )
+
+
 @dataclass
 class DesktopDiagnostics:
     fps: float = 0.0
@@ -168,6 +210,15 @@ class DesktopController:
         self._lost_at: Optional[float] = None
         self._stop_reason = ""
 
+        self._lock = threading.Lock()
+        self._glide_stop = threading.Event()
+        self._glide_thread: Optional[threading.Thread] = None
+        self._aim: Optional[Tuple[float, float]] = None
+        self._vel = (0.0, 0.0)
+        self._aim_at: Optional[float] = None
+        self._shown: Optional[Tuple[float, float]] = None
+        self._last_px: Optional[Tuple[int, int]] = None
+
     def enable(self) -> None:
         self.enabled = True
         self.status = "AIMING"
@@ -175,11 +226,15 @@ class DesktopController:
         self._stop_reason = ""
         self._lost_at = None
         self._reset_gesture()
+        self._clear_aim()
+        self._start_glide()
 
     def disable(self, reason: str = "DISABLED", notify: bool = True) -> None:
         was_on = self.enabled
+        self._stop_glide()
         self._release()
         self._reset_gesture()
+        self._clear_aim()
         self.enabled = False
         self.status = "OFF"
         self._lost_at = None
@@ -193,6 +248,91 @@ class DesktopController:
     def _reset_gesture(self) -> None:
         self._dragging = False
         self._pinch_at = None
+
+    def _gliding(self) -> bool:
+        thread = self._glide_thread
+        return thread is not None and thread.is_alive()
+
+    def _start_glide(self) -> None:
+        # Tests inject a fake mouse and move it inline. Only the real
+        # cursor needs a high-rate follow between camera frames.
+        if not isinstance(self.mouse, Win32Mouse):
+            return
+        if self._gliding():
+            return
+        self._glide_stop.clear()
+        self._glide_thread = threading.Thread(
+            target=self._glide_loop,
+            name="aura-pointer",
+            daemon=True,
+        )
+        self._glide_thread.start()
+
+    def _stop_glide(self) -> None:
+        self._glide_stop.set()
+        thread = self._glide_thread
+        self._glide_thread = None
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=0.2)
+
+    def _clear_aim(self) -> None:
+        with self._lock:
+            self._aim = None
+            self._vel = (0.0, 0.0)
+            self._aim_at = None
+            self._shown = None
+            self._last_px = None
+
+    def _set_aim(self, nx: float, ny: float, now: float) -> bool:
+        """Store the latest fingertip. Returns True when the pointer should snap."""
+        with self._lock:
+            snapped = self._shown is None or self._aim_at is None
+            if self._aim is not None and self._aim_at is not None:
+                dt = now - self._aim_at
+                if 1e-4 < dt < 0.25:
+                    inst_vx = (nx - self._aim[0]) / dt
+                    inst_vy = (ny - self._aim[1]) / dt
+                    self._vel = (
+                        self._vel[0] * 0.35 + inst_vx * 0.65,
+                        self._vel[1] * 0.35 + inst_vy * 0.65,
+                    )
+                elif dt >= 0.25:
+                    self._vel = (0.0, 0.0)
+            else:
+                self._vel = (0.0, 0.0)
+            self._aim = (nx, ny)
+            self._aim_at = now
+            if snapped:
+                self._shown = (nx, ny)
+            return snapped
+
+    def _glide_loop(self) -> None:
+        period = 1.0 / _GLIDE_HZ
+        last = time.perf_counter()
+        while not self._glide_stop.wait(period):
+            now = time.perf_counter()
+            dt = now - last
+            last = now
+            if dt <= 0.0:
+                continue
+            if dt > 0.05:
+                dt = 0.05
+            with self._lock:
+                if not self.enabled or self._aim is None or self._shown is None:
+                    continue
+                shown = glide_step(self._shown, self._aim, self._vel, dt)
+                self._shown = shown
+                try:
+                    sx, sy = self._to_screen(shown[0], shown[1])
+                except Exception:
+                    continue
+                if (sx, sy) == self._last_px:
+                    continue
+                self._last_px = (sx, sy)
+                try:
+                    self.mouse.move(sx, sy)
+                except Exception as exc:
+                    self.last_error = str(exc) or exc.__class__.__name__
 
     def _release(self) -> None:
         if not self._button_down:
@@ -256,6 +396,7 @@ class DesktopController:
         if not iframe.visible:
             self._release()
             self._reset_gesture()
+            self._clear_aim()
             if self._lost_at is None:
                 self._lost_at = now
             self.status = "LOST"
@@ -264,8 +405,15 @@ class DesktopController:
             return
 
         self._lost_at = None
-        x, y = self._to_screen(iframe.cursor_x, iframe.cursor_y)
-        self.mouse.move(x, y)
+        nx = float(iframe.cursor_x)
+        ny = float(iframe.cursor_y)
+        snap = self._set_aim(nx, ny, now)
+        # The glide thread owns the real cursor between frames. Fakes and
+        # the first sample after the hand appears still move immediately.
+        if snap or not self._gliding():
+            x, y = self._to_screen(nx, ny)
+            self._last_px = (x, y)
+            self.mouse.move(x, y)
 
         for event in iframe.events:
             if event.name == PINCH_START:

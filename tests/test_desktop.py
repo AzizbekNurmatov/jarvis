@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from aura.core.desktop import DesktopController, FakeMouse
+from aura.core.desktop import DesktopController, FakeMouse, glide_step
 from aura.core.interaction import (
     CURSOR_MOVE,
     PINCH_END,
@@ -166,6 +166,31 @@ class DesktopControllerTests(unittest.TestCase):
         self.assertFalse(self.mouse.pressed)
         self.assertFalse(self.ctl.enabled)
         self.assertEqual(self.stopped[-1], "DISABLED")
+
+    def test_glide_spreads_a_jump_without_passing_a_still_target(self):
+        shown = (0.20, 0.40)
+        step = glide_step(shown, (0.80, 0.40), (0.0, 0.0), dt=0.008)
+        self.assertGreater(step[0], shown[0])
+        self.assertLess(step[0], 0.80)
+        for _ in range(15):
+            step = glide_step(step, (0.80, 0.40), (0.0, 0.0), dt=0.008)
+        self.assertAlmostEqual(step[0], 0.80, delta=0.01)
+        self.assertLessEqual(step[0], 0.80 + 1e-9)
+
+    def test_glide_matches_a_steady_move(self):
+        # Constant speed: the short lead cancels the easer, so the
+        # pointer sits on the sample instead of trailing it.
+        shown = (0.30, 0.50)
+        velocity = (1.2, 0.0)
+        target = 0.30
+        for _ in range(8):
+            target += velocity[0] * 0.016
+            shown = glide_step(shown, (target, 0.50), velocity, dt=0.016)
+        self.assertAlmostEqual(shown[0], target, delta=0.03)
+
+    def test_fake_mouse_does_not_start_a_glide_thread(self):
+        self.ctl.enable()
+        self.assertFalse(self.ctl._gliding())
 
     def test_emergency_stop(self):
         self.ctl.enable()

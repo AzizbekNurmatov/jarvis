@@ -1,4 +1,5 @@
 
+import threading
 import time
 import tkinter as tk
 
@@ -77,6 +78,50 @@ def smooth_angles(previous, current, factor=SMOOTHING):
     return previous + factor * delta
 
 
+class _LatestFrame:
+    """Keep the newest camera image so the pointer is not a buffered frame behind.
+
+    DirectShow queues several frames. Reading them in order makes the cursor
+    chase where the hand was, not where it is. This pump drops that backlog.
+    """
+
+    def __init__(self, cap):
+        self._cap = cap
+        self._lock = threading.Lock()
+        self._frame = None
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="aura-camera",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _run(self):
+        while not self._stop.is_set():
+            ok, frame = self._cap.read()
+            if not ok or frame is None:
+                if self._stop.wait(0.02):
+                    break
+                continue
+            snapshot = frame.copy()
+            with self._lock:
+                self._frame = snapshot
+
+    def read(self):
+        with self._lock:
+            frame = self._frame
+        if frame is None:
+            return False, None
+        return True, frame
+
+    def close(self):
+        self._stop.set()
+
+    def join(self, timeout=0.3):
+        self._thread.join(timeout=timeout)
+
+
 class AuraHUD:
     def __init__(self, root):
         self.root = root
@@ -93,6 +138,10 @@ class AuraHUD:
         )
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.cap.set(cv2.CAP_PROP_FPS, 60)
+        self._frames = _LatestFrame(self.cap)
+        self._seen_frame = None
 
         self.mesh = mp.solutions.face_mesh.FaceMesh(
             static_image_mode=False,
@@ -1094,7 +1143,7 @@ class AuraHUD:
         if not self.running:
             return
 
-        success, frame = self.cap.read()
+        success, frame = self._frames.read()
 
         if not success:
             self.status_label.config(
@@ -1103,6 +1152,13 @@ class AuraHUD:
             )
             self.root.after(100, self.update_frame)
             return
+
+        # Same snapshot as last pass: processing it again looks like the
+        # hand stopped, which makes a real move feel sticky.
+        if frame is self._seen_frame:
+            self.root.after(4, self.update_frame)
+            return
+        self._seen_frame = frame
 
         frame = cv2.flip(frame, 1)
         height, width = frame.shape[:2]
@@ -1360,7 +1416,7 @@ class AuraHUD:
             text="",
         )
 
-        self.root.after(15, self.update_frame)
+        self.root.after(1, self.update_frame)
 
     # ----------------------------
     # METRIC UPDATES
@@ -1397,8 +1453,10 @@ class AuraHUD:
         except Exception:
             pass
 
+        self._frames.close()
         if self.cap.isOpened():
             self.cap.release()
+        self._frames.join()
 
         self.hand_tracker.close()
         self.mesh.close()

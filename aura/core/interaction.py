@@ -7,8 +7,9 @@ commands are destinations — only the HUD destination is implemented.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, List, Optional, Sequence, Tuple
+import math
 import time
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 from aura.core.hand_gestures import is_fist_pose
 
@@ -51,6 +52,60 @@ class InteractionFrame:
 
 def _clamp01(value: float) -> float:
     return 0.0 if value < 0.0 else 1.0 if value > 1.0 else value
+
+
+def _lowpass_alpha(cutoff_hz: float, dt: float) -> float:
+    """Smoothing weight for a first-order low-pass at this sample interval."""
+    cutoff_hz = cutoff_hz if cutoff_hz > 1e-3 else 1e-3
+    dt = dt if dt > 1e-4 else 1e-4
+    tau = 1.0 / (2.0 * math.pi * cutoff_hz)
+    return 1.0 / (1.0 + tau / dt)
+
+
+class _OneEuro:
+    """Speed-adaptive low-pass (the 1€ filter).
+
+    A fixed blend either trails a fast hand or shakes while the hand is
+    still. This one raises its cutoff as the fingertip speeds up, so a
+    deliberate move stays on the finger and a resting hand stays put.
+    """
+
+    def __init__(self, min_cutoff: float, beta: float, d_cutoff: float):
+        self.min_cutoff = float(min_cutoff)
+        self.beta = float(beta)
+        self.d_cutoff = float(d_cutoff)
+        self._y: Optional[float] = None
+        self._rate = 0.0
+        self._t: Optional[float] = None
+
+    def reset(self) -> None:
+        self._y = None
+        self._rate = 0.0
+        self._t = None
+
+    def __call__(self, value: float, timestamp: float) -> float:
+        if self._y is None or self._t is None:
+            self._y = float(value)
+            self._rate = 0.0
+            self._t = float(timestamp)
+            return self._y
+
+        dt = float(timestamp) - self._t
+        if dt <= 1e-4:
+            return self._y
+        # A tracking gap should snap, not smear the cursor across the screen.
+        if dt > 0.4:
+            self._y = float(value)
+            self._rate = 0.0
+            self._t = float(timestamp)
+            return self._y
+
+        rate = (float(value) - self._y) / dt
+        self._rate += _lowpass_alpha(self.d_cutoff, dt) * (rate - self._rate)
+        cutoff = self.min_cutoff + self.beta * abs(self._rate)
+        self._y += _lowpass_alpha(cutoff, dt) * (float(value) - self._y)
+        self._t = float(timestamp)
+        return self._y
 
 
 def _map_point(x: float, y: float) -> Tuple[float, float]:
@@ -110,8 +165,17 @@ class InteractionEngine:
         start_frames: int = 2,
         end_frames: int = 2,
         destinations: Optional[Sequence[str]] = None,
+        min_cutoff: float = 1.05,
+        beta: float = 24.0,
+        d_cutoff: float = 1.0,
     ):
+        # smooth >= 1 keeps the raw fingertip (tests). Anything lower uses
+        # the adaptive filter; the old fixed blend is what felt late and shaky.
         self.smooth = float(smooth)
+        self._passthrough = self.smooth >= 0.999
+        self.min_cutoff = float(min_cutoff)
+        self.beta = float(beta)
+        self.d_cutoff = float(d_cutoff)
         self.start_frames = max(1, int(start_frames))
         self.end_frames = max(1, int(end_frames))
         self.destinations = tuple(destinations or (DEST_HUD,))
@@ -123,6 +187,8 @@ class InteractionEngine:
         self._sticky_hand = ""
         self._last_hand = ""
         self._fist_offset: Optional[Tuple[float, float]] = None
+        self._fx = _OneEuro(self.min_cutoff, self.beta, self.d_cutoff)
+        self._fy = _OneEuro(self.min_cutoff, self.beta, self.d_cutoff)
 
     def reset(self) -> None:
         self._cursor = None
@@ -132,6 +198,8 @@ class InteractionEngine:
         self._sticky_hand = ""
         self._last_hand = ""
         self._fist_offset = None
+        self._fx.reset()
+        self._fy.reset()
 
     def _emit(self, name: str, x: float, y: float, hand: str, now: float) -> InteractionEvent:
         return InteractionEvent(
@@ -165,14 +233,12 @@ class InteractionEngine:
             return by_label["RIGHT"]
         return hands[0]
 
-    def _smooth(self, x: float, y: float) -> Tuple[float, float]:
-        if self._cursor is None:
+    def _smooth(self, x: float, y: float, now: float) -> Tuple[float, float]:
+        if self._passthrough:
             self._cursor = (x, y)
             return x, y
-        px, py = self._cursor
-        a = self.smooth
-        sx = px * (1.0 - a) + x * a
-        sy = py * (1.0 - a) + y * a
+        sx = self._fx(x, now)
+        sy = self._fy(y, now)
         self._cursor = (sx, sy)
         return sx, sy
 
@@ -230,7 +296,7 @@ class InteractionEngine:
             self._fist_offset = None
             raw_x, raw_y = mapped_tip
 
-        x, y = self._smooth(raw_x, raw_y)
+        x, y = self._smooth(raw_x, raw_y, now)
         hand = _hand_label(chosen)
         self._last_hand = hand
         self._sticky_hand = hand

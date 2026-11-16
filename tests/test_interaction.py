@@ -55,6 +55,40 @@ class InteractionEngineTests(unittest.TestCase):
         self.assertGreater(second.cursor_x, x0)
         self.assertLess(second.cursor_x, target.cursor_x)
 
+    def test_fast_move_stays_close_to_the_finger(self):
+        engine = InteractionEngine()
+        start = pointing()
+        engine.update([hand_obj(start, "Right")], now=1.0)
+        moved = pointing()
+        for lm in moved:
+            lm.x += 0.18
+        raw = InteractionEngine(smooth=1.0)
+        target = raw.update([hand_obj(moved, "Right")], now=1.0)
+        origin = raw.update([hand_obj(start, "Right")], now=2.0)
+        # Two frames, like a real camera, so speed can open the filter.
+        engine.update([hand_obj(moved, "Right")], now=1.0 + 1.0 / 30.0)
+        caught = engine.update([hand_obj(moved, "Right")], now=1.0 + 2.0 / 30.0)
+        span = abs(target.cursor_x - origin.cursor_x)
+        self.assertGreater(span, 0.15)
+        covered = abs(caught.cursor_x - origin.cursor_x)
+        self.assertGreater(covered, span * 0.75)
+
+    def test_resting_finger_rejects_jitter(self):
+        engine = InteractionEngine()
+        hand = pointing()
+        t = 1.0
+        engine.update([hand_obj(hand, "Right")], now=t)
+        for _ in range(10):
+            t += 1.0 / 30.0
+            settled = engine.update([hand_obj(hand, "Right")], now=t)
+        jitter = pointing()
+        jitter[8].x = hand[8].x + 0.012
+        jitter[8].y = hand[8].y - 0.010
+        t += 1.0 / 30.0
+        shaken = engine.update([hand_obj(jitter, "Right")], now=t)
+        self.assertLess(abs(shaken.cursor_x - settled.cursor_x), 0.006)
+        self.assertLess(abs(shaken.cursor_y - settled.cursor_y), 0.006)
+
     def test_fist_start_hold_end(self):
         self.engine.update([hand_obj(pointing(), "Right")], now=1.00)
         first = self.engine.update([hand_obj(fist(), "Right")], now=1.05)
