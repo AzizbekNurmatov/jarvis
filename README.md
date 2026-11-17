@@ -14,6 +14,7 @@ A webcam desktop app for **head pose**, **blink / wink detection**, **hand gestu
 - Rule-based hand gestures: open palm, fist, pointing, peace sign, pinch
 - Interaction Lab: index-finger cursor, fist-to-click, fist-and-drag
 - Desktop Control (off by default): move / click / drag the Windows cursor with your hand
+- Pointer follow that stays steady when the hand is still and stays with the finger when you move, including a glide between camera frames on Windows
 - Compact dark dashboard with FPS and live gesture status in the header
 
 ## Requirements
@@ -97,7 +98,7 @@ Unmatched poses show `UNKNOWN`. No hand shows `NO HAND`. Left and right hands ar
 
 ### Interaction Lab
 
-Click **Interaction Lab** (the button turns green). An index-finger cursor appears on the lab canvas:
+Click **Interaction Lab** (the button turns green). An index-finger cursor appears on the lab canvas. The same adaptive follow used by Desktop Control drives it: a resting fingertip stays steady, and a deliberate move stays with the finger instead of trailing it.
 
 - **NODE** — make a fist and drag, then open the hand to release
 - **CLICK** — one count per fist (holding does not repeat)
@@ -116,13 +117,21 @@ You do not need the Hand Tracking or Gesture Recognition checkboxes for the lab.
 
 Also disengages if the hand leaves the frame for about a second, if you toggle the mode off, if an error occurs, or when AURA exits.
 
-While it is on, AURA drives the cursor every frame and will fight a physical mouse. Use **Esc** rather than trying to fist-click the orange button. A slim strip shows FPS, interaction latency, status (`AIMING` / `FIST` / `DRAG` / `LOST`), and a sensitivity slider.
+While it is on, AURA owns the cursor and will fight a physical mouse. Use **Esc** rather than trying to fist-click the orange button. A slim strip shows FPS, interaction latency, status (`AIMING` / `FIST` / `DRAG` / `LOST`), and a sensitivity slider.
+
+**How the pointer follows**
+
+- The fingertip is filtered adaptively. Holding still damps camera shake. A real move raises the response so the cursor stays on the finger instead of easing along behind it.
+- The camera pump keeps the newest frame and drops older frames sitting in the webcam queue, so the aim point is where the hand is now.
+- On Windows the cursor is updated between camera frames (a short glide plus a matching bit of the current velocity). Motion stays continuous, and a stop settles on the fingertip instead of coasting past it.
+
+The lab canvas updates with each new hand sample. The Windows cursor is the one that glides between samples.
 
 Desktop Control is Windows-only. macOS / Linux still run tracking, gestures, and the Interaction Lab.
 
 ## Configuration
 
-Camera and smoothing defaults live at the top of `main.py`:
+Camera size and **head-pose** smoothing live at the top of `main.py`:
 
 ```python
 CAMERA_INDEX = 0
@@ -132,8 +141,19 @@ SMOOTHING = 0.25
 ```
 
 - Raise `CAMERA_INDEX` if the wrong webcam opens.
-- Lower resolution (for example `640` × `480`) if FPS drops.
-- Higher `SMOOTHING` reacts faster but can look jittery; lower values are smoother with more lag.
+- Lower resolution (for example `640` × `480`) if FPS drops. The hand cursor can only follow as often as new hand samples arrive.
+- Higher `SMOOTHING` makes yaw / pitch / roll and head position react faster but can look jittery. Lower values are smoother with more lag. This does **not** control the hand cursor.
+
+Hand-cursor response is on `InteractionEngine` in `aura/core/interaction.py`:
+
+```python
+InteractionEngine(
+    min_cutoff=1.05,  # lower = steadier when the hand is still
+    beta=24.0,        # higher = a real move sticks to the finger sooner
+)
+```
+
+`smooth=1` turns that filter off (the tests use this). Windows cursor glide timing is `_GLIDE_TAU_S` and `_GLIDE_LEAD_S` in `aura/core/desktop.py` (both default to 10 ms).
 
 Blink, head-gesture, hand-gesture, and desktop click/drag thresholds are tunable on the classes in `aura/core/`.
 
@@ -156,11 +176,11 @@ Blink, head-gesture, hand-gesture, and desktop click/drag thresholds are tunable
 ```
 main.py                         # Tkinter HUD + camera loop
 aura/core/blink.py              # EAR blink / wink detection + eye contours
-aura/core/desktop.py            # Windows mouse destination (click / drag / safety)
+aura/core/desktop.py            # Windows mouse destination, click / drag / safety, cursor glide
 aura/core/gesture_engine.py     # One-shot head + blink gestures
 aura/core/hand_gestures.py      # Rule-based hand pose classification + pinch
 aura/core/hand_tracking.py      # Optional MediaPipe Hands overlay
-aura/core/interaction.py        # Cursor + pinch events for HUD / OS / TARS
+aura/core/interaction.py        # Adaptive fingertip cursor + fist events for HUD / OS / TARS
 aura/core/pose.py               # Angle wrap / pose helpers
 aura/core/visuals.py            # Older OpenCV drawing helpers (unused by HUD)
 aura/core/model.py              # Optional Face Landmarker downloader (unused by HUD)
@@ -179,7 +199,7 @@ Live path: `main.py` → Face Mesh (+ shared Hands when needed) → blink / pose
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-Tests cover blink classification, head gestures, hand poses, pinch hysteresis, Interaction Lab events, and Desktop Control click/drag/safety with a fake mouse (they do not move the real cursor).
+Tests cover blink classification, head gestures, hand poses, pinch hysteresis, Interaction Lab events, fingertip follow (a fast move stays with the finger, resting jitter is rejected), and Desktop Control click/drag/safety plus cursor glide. Desktop tests use a fake mouse and do not move the real cursor.
 
 ## Troubleshooting
 
@@ -190,6 +210,7 @@ Tests cover blink classification, head gestures, hand poses, pinch hysteresis, I
 - **Fist not grabbing in the lab / desktop:** Close all four fingers. Aim with a pointed index first, then fist; the cursor stays on the aim point instead of jumping to the knuckles.
 - **Pinch not showing in the gesture panel:** Bring thumb and index close (a pad pinch still counts). A tight fist is classified as FIST, not PINCH.
 - **Desktop cursor fighting the mouse:** Press **Esc**, or wait for the hand to leave the frame. Desktop Control must be enabled explicitly each session.
+- **Cursor still feels late or stepped:** Restart AURA so the current pointer code is running. Keep the hand well lit and fully in frame. If FPS is very low, lower the camera resolution — glide fills the gaps, but it still depends on fresh hand samples.
 - **Winks registering as both eyes:** Recalibrate, face the camera squarely, and blink a bit more deliberately with the other eye open.
 - **Installation fails:** Confirm Python 3.11 is **64-bit**, then run the terminal setup commands to see pip errors.
 - **Missing Pillow / PIL error:** Re-run `pip install -r requirements.txt`.
