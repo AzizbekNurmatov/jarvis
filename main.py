@@ -19,6 +19,7 @@ from aura.core.desktop import DesktopController
 from aura.core.interaction import InteractionEngine, draw_index_pointer
 from aura.core.pose import wrap_angles
 from aura.hud.desktop_panel import DesktopPanel
+from aura.hud.head_widgets import HeadWidgets
 from aura.hud.lab import InteractionLab
 
 
@@ -168,6 +169,8 @@ class AuraHUD:
         self.show_eyes = tk.BooleanVar(value=True)
         self.show_hands = tk.BooleanVar(value=False)
         self.recognize_gestures = tk.BooleanVar(value=False)
+        self.show_widgets = tk.BooleanVar(value=False)
+        self.head_widgets = HeadWidgets()
 
         self.neutral_rotation = None
         self.neutral_position = None
@@ -325,7 +328,7 @@ class AuraHUD:
         # Camera preview.
         camera_card = self.card(
             left, "LIVE CAMERA",
-            "Face / pose / eyes / optional hands / gestures"
+            "Face / pose / eyes / optional hands / gestures / widgets"
         )
         camera_card.pack(fill="both", expand=True)
 
@@ -345,6 +348,7 @@ class AuraHUD:
                 self.recognize_gestures,
                 self._on_gesture_toggle,
             ),
+            ("Widgets", self.show_widgets, self._on_widgets_toggle),
         ):
             tk.Checkbutton(
                 toggles,
@@ -776,6 +780,10 @@ class AuraHUD:
             self.hand_gesture_snapshot = None
             self.render_hand_gesture()
         self._sync_hand_tracker()
+
+    def _on_widgets_toggle(self):
+        if not self.show_widgets.get():
+            self.head_widgets.reset_anchor()
 
     def _enforce_sidebar_width(self, _event=None):
         """Keep the metrics rail locked so the camera cannot collapse."""
@@ -1260,6 +1268,8 @@ class AuraHUD:
                     time.perf_counter() + 0.45
                 )
                 self.render_gesture()
+                if self.show_widgets.get():
+                    self.head_widgets.handle(gesture_event)
             else:
                 self.render_gesture_status()
 
@@ -1354,6 +1364,9 @@ class AuraHUD:
                     (100, 150, 255), 3,
                 )
 
+            if self.show_widgets.get():
+                self.head_widgets.draw(frame, landmarks)
+
         else:
             self.status_label.config(
                 text="● NO FACE",
@@ -1361,6 +1374,7 @@ class AuraHUD:
             )
             self.blink_detector.face_lost()
             self.blink_result = None
+            self.head_widgets.reset_anchor()
             self.render_gesture_status()
 
         self.update_metrics()

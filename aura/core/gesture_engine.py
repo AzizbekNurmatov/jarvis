@@ -27,6 +27,10 @@ class GestureEvent:
     name: str
     label: str
     timestamp: float
+    # "up" / "down" for a nod. Empty for every other gesture.
+    # Positive pitch is a downward nod in this HUD (the pitch axis
+    # is drawn down the image).
+    direction: str = ""
 
 
 class GestureEngine:
@@ -114,11 +118,18 @@ class GestureEngine:
         self._turn_left_fired = False
         self._turn_right_fired = False
 
-    def _emit(self, name: str, now: float, head: bool = False) -> GestureEvent:
+    def _emit(
+        self,
+        name: str,
+        now: float,
+        head: bool = False,
+        direction: str = "",
+    ) -> GestureEvent:
         event = GestureEvent(
             name=name,
             label=GESTURE_LABELS[name],
             timestamp=now,
+            direction=direction,
         )
         self.latest = event
         self.status = "Cooldown"
@@ -194,7 +205,12 @@ class GestureEngine:
                 and abs(self._nod_peak) >= self.nod_down_deg
                 and now - self._nod_started_at <= self.nod_window_s
             ):
-                return self._emit("HEAD_NOD", now, head=True)
+                # Sign of the peak is the nod direction. Read it before
+                # emit() clears the in-progress nod.
+                direction = "down" if self._nod_peak > 0.0 else "up"
+                return self._emit(
+                    "HEAD_NOD", now, head=True, direction=direction
+                )
             if now - self._nod_started_at > self.nod_window_s:
                 self._nod_started_at = None
                 self._nod_peak = 0.0

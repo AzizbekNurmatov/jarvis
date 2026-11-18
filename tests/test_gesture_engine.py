@@ -82,6 +82,17 @@ class GestureEngineTests(unittest.TestCase):
         )
         self.assertIsNotNone(event)
         self.assertEqual(event.name, "HEAD_NOD")
+        self.assertEqual(event.direction, "down")
+
+    def test_head_nod_up(self):
+        self.engine.update(None, [0.0, 0.0, 0.0], now=5.5)
+        self.engine.update(None, [0.0, -16.0, 0.0], now=5.6)
+        event = self.engine.update(
+            None, [0.0, -2.0, 0.0], now=5.9
+        )
+        self.assertIsNotNone(event)
+        self.assertEqual(event.name, "HEAD_NOD")
+        self.assertEqual(event.direction, "up")
 
     def test_head_shake(self):
         self.engine.update(None, [0.0, 0.0, 0.0], now=6.0)
