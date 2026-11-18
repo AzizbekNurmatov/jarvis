@@ -708,6 +708,7 @@ class AuraHUD:
         return bool(
             self.show_hands.get()
             or self.recognize_gestures.get()
+            or self.show_widgets.get()
             or self._lab_on
             or self._desktop_on
         )
@@ -784,6 +785,7 @@ class AuraHUD:
     def _on_widgets_toggle(self):
         if not self.show_widgets.get():
             self.head_widgets.reset_anchor()
+        self._sync_hand_tracker()
 
     def _enforce_sidebar_width(self, _event=None):
         """Keep the metrics rail locked so the camera cannot collapse."""
@@ -1185,12 +1187,18 @@ class AuraHUD:
         if self.show_hands.get():
             self.hand_tracker.draw(frame, tracked_hands)
 
-        if self.recognize_gestures.get():
-            snapshot = self.hand_gesture_recognizer.update(tracked_hands)
-            self.hand_gesture_snapshot = snapshot
-            for hand, gesture in zip(tracked_hands, snapshot.hands):
+        # Widgets reuse the same hand classifier. The gesture panel
+        # still draws only when that checkbox is on.
+        hand_snapshot = None
+        if self.recognize_gestures.get() or self.show_widgets.get():
+            hand_snapshot = self.hand_gesture_recognizer.update(tracked_hands)
+        if self.recognize_gestures.get() and hand_snapshot is not None:
+            self.hand_gesture_snapshot = hand_snapshot
+            for hand, gesture in zip(tracked_hands, hand_snapshot.hands):
                 draw_hand_gesture_overlay(frame, hand, gesture)
             self.render_hand_gesture()
+        if self.show_widgets.get() and hand_snapshot is not None:
+            self.head_widgets.handle_hands(hand_snapshot)
 
         if self._interaction_needed():
             iframe = self.interaction_engine.update(tracked_hands)

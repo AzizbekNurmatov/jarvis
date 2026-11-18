@@ -15,8 +15,10 @@ from aura.hud.head_widgets import (
 )
 
 
-def _event(name, now, direction=""):
-    return SimpleNamespace(name=name, timestamp=now, direction=direction)
+def _event(name, now, direction="", phase="GESTURE_STARTED"):
+    return SimpleNamespace(
+        name=name, timestamp=now, direction=direction, phase=phase,
+    )
 
 
 class _Point:
@@ -60,42 +62,56 @@ class HeadWidgetTests(unittest.TestCase):
         self.widgets.handle(_event("HEAD_NOD", 1.0))
         self.assertEqual(self.widgets.focus, DATE)
 
-    def test_double_blink_toggles_only_the_focused_widget(self):
+    def test_point_toggles_only_the_focused_widget(self):
         self.widgets.handle(_event("HEAD_NOD", 1.0, "down"))
-        self.widgets.handle(_event("DOUBLE_BLINK", 2.0))
+        self.widgets.handle(_event("POINTING", 2.0))
         self.assertEqual(self.widgets.focus, DATE)
         self.assertEqual(self.widgets.active, [False, True, False])
         self.assertEqual(self.widgets.value(DATE), "Nov 17")
         self.assertEqual(self.widgets.value(CLOCK), "Clock")
         self.assertEqual(self.widgets.count, 0)
 
-        self.widgets.handle(_event("DOUBLE_BLINK", 3.0))
+        self.widgets.handle(_event("POINTING", 3.0))
         self.assertFalse(self.widgets.active[DATE])
         self.assertEqual(self.widgets.value(DATE), "Date")
 
-    def test_selection_cooldown_ignores_a_second_blink(self):
-        self.widgets.handle(_event("DOUBLE_BLINK", 1.00))
+    def test_held_point_does_not_toggle(self):
+        self.widgets.handle(_event("POINTING", 1.0, phase="GESTURE_HELD"))
+        self.assertEqual(self.widgets.active, [False, False, False])
+        held = SimpleNamespace(
+            hands=[SimpleNamespace(gesture="POINTING", event="GESTURE_HELD")],
+        )
+        self.widgets.handle_hands(held, 2.0)
+        self.assertFalse(self.widgets.active[CLOCK])
+        started = SimpleNamespace(
+            hands=[SimpleNamespace(gesture="POINTING", event="GESTURE_STARTED")],
+        )
+        self.widgets.handle_hands(started, 3.0)
+        self.assertTrue(self.widgets.active[CLOCK])
+
+    def test_selection_cooldown_ignores_a_second_point(self):
+        self.widgets.handle(_event("POINTING", 1.00))
         self.assertTrue(self.widgets.active[CLOCK])
         self.assertEqual(self.widgets.value(CLOCK), "14:05:09")
-        self.widgets.handle(_event("DOUBLE_BLINK", 1.40))
+        self.widgets.handle(_event("POINTING", 1.40))
         self.assertTrue(self.widgets.active[CLOCK])
-        self.widgets.handle(_event("DOUBLE_BLINK", 1.80))
+        self.widgets.handle(_event("POINTING", 1.80))
         self.assertFalse(self.widgets.active[CLOCK])
 
     def test_counter_increments_only_when_activated(self):
         self.widgets.handle(_event("HEAD_NOD", 1.0, "up"))
         self.assertEqual(self.widgets.focus, COUNTER)
-        self.widgets.handle(_event("DOUBLE_BLINK", 2.0))
+        self.widgets.handle(_event("POINTING", 2.0))
         self.assertEqual(self.widgets.count, 1)
         self.assertEqual(self.widgets.value(COUNTER), "1")
-        self.widgets.handle(_event("DOUBLE_BLINK", 3.0))
+        self.widgets.handle(_event("POINTING", 3.0))
         self.assertEqual(self.widgets.count, 1)
         self.assertEqual(self.widgets.value(COUNTER), "Counter")
-        self.widgets.handle(_event("DOUBLE_BLINK", 4.0))
+        self.widgets.handle(_event("POINTING", 4.0))
         self.assertEqual(self.widgets.count, 2)
 
     def test_nod_leaves_an_active_widget_on(self):
-        self.widgets.handle(_event("DOUBLE_BLINK", 1.0))
+        self.widgets.handle(_event("POINTING", 1.0))
         self.widgets.handle(_event("HEAD_NOD", 2.0, "down"))
         self.assertEqual(self.widgets.focus, DATE)
         self.assertTrue(self.widgets.active[CLOCK])
@@ -103,7 +119,8 @@ class HeadWidgetTests(unittest.TestCase):
         self.assertEqual(self.widgets.count, 0)
 
     def test_other_gestures_do_nothing(self):
-        self.widgets.handle(_event("BOTH_BLINK", 1.0))
+        self.widgets.handle(_event("DOUBLE_BLINK", 1.0))
+        self.widgets.handle(_event("BOTH_BLINK", 1.2))
         self.widgets.handle(_event("HEAD_SHAKE", 2.0))
         self.widgets.handle(None)
         self.assertEqual(self.widgets.focus, CLOCK)

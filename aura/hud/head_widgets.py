@@ -1,7 +1,8 @@
 """Compact widgets anchored beside the tracked face.
 
-Nod up / down moves a highlight. Double blink toggles the focused
-widget. Nothing else — including landing on a widget — activates it.
+Nod up / down moves a highlight. A pointing pose toggles the focused
+widget once, when the pose is first confirmed. Holding the point,
+nodding onto a widget, or blinking does not activate it.
 """
 
 from __future__ import annotations
@@ -16,6 +17,10 @@ _FOREHEAD = 10
 _CHIN = 152
 _CHEEK_A = 234
 _CHEEK_B = 454
+
+# Same names the hand recognizer already emits.
+POINTING = "POINTING"
+POINT_STARTED = "GESTURE_STARTED"
 
 CLOCK, DATE, COUNTER = 0, 1, 2
 TITLES = ("Clock", "Date", "Counter")
@@ -120,8 +125,27 @@ class HeadWidgets:
             self.focus = (self.focus + step) % len(TITLES)
             return
 
-        if name != "DOUBLE_BLINK":
+        # Only the rising edge of a point. A held point must not toggle
+        # again on every frame.
+        phase = getattr(event, "phase", POINT_STARTED)
+        if name != POINTING or phase != POINT_STARTED:
             return
+        self._toggle(now)
+
+    def handle_hands(self, snapshot, now: Optional[float] = None) -> None:
+        """Toggle once if any hand just confirmed a point."""
+        if snapshot is None:
+            return
+        now = time.perf_counter() if now is None else now
+        for hand in getattr(snapshot, "hands", ()) or ():
+            if (
+                getattr(hand, "gesture", "") == POINTING
+                and getattr(hand, "event", "") == POINT_STARTED
+            ):
+                self._toggle(now)
+                return
+
+    def _toggle(self, now: float) -> None:
         if now < self._select_until:
             return
         self._select_until = now + self.select_cooldown_s
