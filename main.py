@@ -11,9 +11,14 @@ from PIL import Image, ImageTk
 from aura.core.blink import BlinkDetector
 from aura.core.gesture_engine import GestureEngine
 from aura.core.hand_gestures import (
+    EVENT_STARTED,
+    PINCH,
+    POINTING,
+    STATUS_STABLE,
     HandGestureRecognizer,
     draw_hand_gesture_overlay,
 )
+from aura.core.targets import TargetSelector, normalize_region
 from aura.core.hand_tracking import HandTracker
 from aura.core.desktop import DesktopController
 from aura.core.interaction import InteractionEngine, draw_index_pointer
@@ -21,6 +26,8 @@ from aura.core.pose import wrap_angles
 from aura.hud.desktop_panel import DesktopPanel
 from aura.hud.head_widgets import HeadWidgets
 from aura.hud.lab import InteractionLab
+from aura.hud.target_overlay import draw_target_overlay
+from aura.hud.target_panel import TargetPanel
 
 
 # ----------------------------
@@ -163,6 +170,9 @@ class AuraHUD:
         )
         self._lab_on = False
         self._desktop_on = False
+        self._targets_on = False
+        self.targets = TargetSelector()
+        self._target_drag = None
 
         self.show_mesh = tk.BooleanVar(value=False)
         self.show_axes = tk.BooleanVar(value=False)
@@ -328,7 +338,7 @@ class AuraHUD:
         # Camera preview.
         camera_card = self.card(
             left, "LIVE CAMERA",
-            "Face / pose / eyes / optional hands / gestures / widgets"
+            "Face / pose / eyes / optional hands / gestures / widgets / targets"
         )
         camera_card.pack(fill="both", expand=True)
 
@@ -374,6 +384,19 @@ class AuraHUD:
         )
         self.desktop_button.pack(side="right", padx=4)
 
+        self.targets_button = tk.Button(
+            controls,
+            text="Targets",
+            command=self._toggle_targets,
+            bg=PANEL_2,
+            fg=TEXT,
+            relief="flat",
+            padx=12,
+            pady=5,
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.targets_button.pack(side="right", padx=4)
+
         self.lab_button = tk.Button(
             controls,
             text="Interaction Lab",
@@ -417,6 +440,7 @@ class AuraHUD:
         self.camera_label.place(relx=0.5, rely=0.5, anchor="center")
 
         self.lab = InteractionLab(left)
+        self.target_panel = TargetPanel(left, on_clear=self._clear_targets)
         self.desktop_panel = DesktopPanel(
             left, on_sensitivity=self._set_desktop_sensitivity
         )
@@ -709,6 +733,7 @@ class AuraHUD:
             self.show_hands.get()
             or self.recognize_gestures.get()
             or self.show_widgets.get()
+            or self._targets_on
             or self._lab_on
             or self._desktop_on
         )
@@ -786,6 +811,98 @@ class AuraHUD:
         if not self.show_widgets.get():
             self.head_widgets.reset_anchor()
         self._sync_hand_tracker()
+
+    def _toggle_targets(self):
+        self._targets_on = not self._targets_on
+        if self._targets_on:
+            self.target_panel.frame.pack(side="bottom", fill="x", pady=(8, 0))
+            self.targets_button.config(bg=PURPLE, fg="#06101b")
+            self.camera_label.bind("<ButtonPress-1>", self._target_press)
+            self.camera_label.bind("<B1-Motion>", self._target_drag_move)
+            self.camera_label.bind("<ButtonRelease-1>", self._target_release)
+        else:
+            self._target_drag = None
+            self.target_panel.frame.pack_forget()
+            self.targets_button.config(bg=PANEL_2, fg=TEXT)
+            self.camera_label.unbind("<ButtonPress-1>")
+            self.camera_label.unbind("<B1-Motion>")
+            self.camera_label.unbind("<ButtonRelease-1>")
+        self._sync_hand_tracker()
+
+    def _clear_targets(self):
+        self.targets.clear()
+        self._target_drag = None
+        self.target_panel.note("")
+
+    def _preview_norm(self, event):
+        image = self.video_image
+        if image is None:
+            return None
+        width = max(image.width(), 1)
+        height = max(image.height(), 1)
+        x = 0.0 if event.x < 0 else 1.0 if event.x > width else event.x / width
+        y = 0.0 if event.y < 0 else 1.0 if event.y > height else event.y / height
+        return x, y
+
+    def _target_press(self, event):
+        if not self._targets_on:
+            return
+        origin = self._preview_norm(event)
+        if origin is None:
+            return
+        self._target_drag = (origin[0], origin[1], origin[0], origin[1])
+
+    def _target_drag_move(self, event):
+        if self._target_drag is None:
+            return
+        point = self._preview_norm(event)
+        if point is None:
+            return
+        x0, y0 = self._target_drag[0], self._target_drag[1]
+        self._target_drag = (x0, y0, point[0], point[1])
+
+    def _target_release(self, event):
+        drag = self._target_drag
+        self._target_drag = None
+        if drag is None or not self._targets_on:
+            return
+        point = self._preview_norm(event)
+        if point is None:
+            return
+        box = normalize_region(drag[0], drag[1], point[0], point[1])
+        if box is None:
+            self.target_panel.note("That box is too small. Drag a larger region.")
+            return
+        region = self.targets.add_region(self.target_panel.region_name(), *box)
+        if region is None:
+            self.target_panel.note("Three regions already. Clear one set before adding more.")
+            return
+        self.target_panel.clear_name()
+        self.target_panel.note("")
+
+    def _target_draft(self):
+        drag = self._target_drag
+        if drag is None:
+            return None
+        left = min(drag[0], drag[2])
+        top = min(drag[1], drag[3])
+        return (left, top, abs(drag[2] - drag[0]), abs(drag[3] - drag[1]))
+
+    def _target_inputs(self, hands, snapshot):
+        """Landmarks plus whether the stabilized pose is a point or a new pinch."""
+        if not hands or snapshot is None:
+            return None, False, False, False
+        chosen = None
+        for hand, result in zip(hands, snapshot.hands):
+            pinch = result.gesture == PINCH and result.event == EVENT_STARTED
+            stable = result.gesture == POINTING and result.status == STATUS_STABLE
+            raw = result.raw_gesture == POINTING or stable
+            rank = 3 if pinch else 2 if stable else 1 if raw else 0
+            if chosen is None or rank > chosen[0]:
+                chosen = (rank, getattr(hand, "landmarks", None), stable, raw, pinch)
+        if chosen is None:
+            return None, False, False, False
+        return chosen[1], chosen[2], chosen[3], chosen[4]
 
     def _enforce_sidebar_width(self, _event=None):
         """Keep the metrics rail locked so the camera cannot collapse."""
@@ -1190,14 +1307,24 @@ class AuraHUD:
         # Widgets reuse the same hand classifier. The gesture panel
         # still draws only when that checkbox is on.
         hand_snapshot = None
-        if self.recognize_gestures.get() or self.show_widgets.get():
+        if (
+            self.recognize_gestures.get()
+            or self.show_widgets.get()
+            or self._targets_on
+        ):
             hand_snapshot = self.hand_gesture_recognizer.update(tracked_hands)
         if self.recognize_gestures.get() and hand_snapshot is not None:
             self.hand_gesture_snapshot = hand_snapshot
             for hand, gesture in zip(tracked_hands, hand_snapshot.hands):
                 draw_hand_gesture_overlay(frame, hand, gesture)
             self.render_hand_gesture()
-        if self.show_widgets.get() and hand_snapshot is not None:
+        # Pointing confirms a widget. While Targets is on, that same pose
+        # is aim, so a point should not also toggle a widget.
+        if (
+            self.show_widgets.get()
+            and hand_snapshot is not None
+            and not self._targets_on
+        ):
             self.head_widgets.handle_hands(hand_snapshot)
 
         if self._interaction_needed():
@@ -1384,6 +1511,22 @@ class AuraHUD:
             self.blink_result = None
             self.head_widgets.reset_anchor()
             self.render_gesture_status()
+
+        if self._targets_on:
+            landmarks, stable, raw, pinch = self._target_inputs(
+                tracked_hands, hand_snapshot
+            )
+            aspect = width / float(height) if height else 1.0
+            target_frame = self.targets.update(
+                landmarks,
+                time.perf_counter(),
+                pointing_stable=stable,
+                pointing_raw=raw,
+                pinch_started=pinch,
+                aspect=aspect,
+            )
+            draw_target_overlay(frame, target_frame, self._target_draft())
+            self.target_panel.render(target_frame)
 
         self.update_metrics()
         self.draw_axes()
