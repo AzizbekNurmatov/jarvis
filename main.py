@@ -165,8 +165,8 @@ class AuraHUD:
         self._desktop_on = False
 
         self.show_mesh = tk.BooleanVar(value=False)
-        self.show_axes = tk.BooleanVar(value=True)
-        self.show_eyes = tk.BooleanVar(value=True)
+        self.show_axes = tk.BooleanVar(value=False)
+        self.show_eyes = tk.BooleanVar(value=False)
         self.show_hands = tk.BooleanVar(value=False)
         self.recognize_gestures = tk.BooleanVar(value=False)
         self.show_widgets = tk.BooleanVar(value=False)
