@@ -1,6 +1,6 @@
 # AURA — Spatial Tracking HUD
 
-A webcam desktop app for **head pose**, **blink / wink detection**, **hand gesture recognition**, an **Interaction Lab**, and optional **Windows desktop control**. Built with MediaPipe, OpenCV, and a Tkinter HUD.
+A webcam desktop app for **head pose**, **blink / wink detection**, **hand gesture recognition**, **head-anchored widgets**, an **Interaction Lab**, and optional **Windows desktop control**. Built with MediaPipe, OpenCV, and a Tkinter HUD.
 
 ## Features
 
@@ -15,6 +15,7 @@ A webcam desktop app for **head pose**, **blink / wink detection**, **hand gestu
 - Interaction Lab: index-finger cursor, fist-to-click, fist-and-drag
 - Desktop Control (off by default): move / click / drag the Windows cursor with your hand
 - Pointer follow that stays steady when the hand is still and stays with the finger when you move, including a glide between camera frames on Windows
+- Head-anchored widgets (off by default): Clock, Date, and Counter sit beside the face, follow the head, and are driven by nods plus a pointing pose
 - Compact dark dashboard with FPS and live gesture status in the header
 
 ## Requirements
@@ -60,12 +61,13 @@ python3.11 -m venv .venv
 | **Eye Tracking** | Toggle eyelid / eye-socket bounds on the preview (blink detection still runs either way) |
 | **Hand Tracking** | Toggle the hand skeleton overlay |
 | **Gesture Recognition** | Toggle the hand-gesture HUD panel and camera labels |
+| **Widgets** | Show Clock, Date, and Counter beside the head (off by default) |
 | **Interaction Lab** | Show the fist-driven lab canvas under the camera |
 | **Desktop Control** | Move the Windows cursor with your index finger (off by default) |
 
 Close the window to quit. The app releases the camera, any hand model, and a held mouse button on exit.
 
-Hand detection runs once and is shared. It starts when **Hand Tracking**, **Gesture Recognition**, **Interaction Lab**, or **Desktop Control** is on, and stops when all of those are off.
+Hand detection runs once and is shared. It starts when **Hand Tracking**, **Gesture Recognition**, **Widgets**, **Interaction Lab**, or **Desktop Control** is on, and stops when all of those are off.
 
 ### Head / eye gestures
 
@@ -76,7 +78,7 @@ These fire as **one-shot** events (not every frame):
 | Left / Right wink | Close one eye while the other stays open |
 | Both blink | Blink both eyes together |
 | Double blink | Two bilateral blinks in quick succession |
-| Head nod | Pitch down (or up) then return to neutral |
+| Head nod | Pitch down or up, then return to neutral. With **Widgets** on, a downward nod moves the highlight down and an upward nod moves it up |
 | Head shake | Yaw both directions, then return |
 | Head turn left / right | Hold a left or right yaw briefly |
 
@@ -94,7 +96,23 @@ Enable **Gesture Recognition**. Poses are classified from the existing 21 hand l
 | Peace sign | Index and middle extended, ring and pinky curled |
 | Pinch | Thumb near the index tip or last index joint |
 
-Unmatched poses show `UNKNOWN`. No hand shows `NO HAND`. Left and right hands are tracked separately. Pinch is still classified in the HUD; **Interaction Lab** and **Desktop Control** grab with a **fist**.
+Unmatched poses show `UNKNOWN`. No hand shows `NO HAND`. Left and right hands are tracked separately. Pinch is still classified in the HUD; **Interaction Lab** and **Desktop Control** grab with a **fist**. **Widgets** confirm with **pointing**, not a blink.
+
+### Head widgets
+
+Click **Widgets**. Three compact chips appear beside the face, on the side of the frame with more room, and glide with the head. They do not sit on the face. You do not need **Gesture Recognition** or **Hand Tracking** checked; Widgets starts the shared hand model on its own. **Hand Tracking** is still useful if you want to see the skeleton.
+
+| Widget | While off | After you confirm it |
+| --- | --- | --- |
+| Clock | Title only | Current time (`HH:MM:SS`), chip turns green |
+| Date | Title only | Today’s date (`Nov 17`), chip turns green |
+| Counter | Title only | Increments by one and shows the number. Turning it off does not add another count |
+
+**Nod** up or down only moves the highlight. Landing on a widget does not turn it on.
+
+**Point** to confirm: index finger extended, the other fingers curled. The toggle happens once, when that pose is first confirmed. Holding the point does not repeat it. A second point within about 0.7 seconds is ignored. Point again after the cooldown to turn the same widget off. A blink, including a double blink, does not select a widget.
+
+Calibrate neutral first so nods line up with your resting pose. Positive pitch is treated as a nod down.
 
 ### Interaction Lab
 
@@ -155,11 +173,20 @@ InteractionEngine(
 
 `smooth=1` turns that filter off (the tests use this). Windows cursor glide timing is `_GLIDE_TAU_S` and `_GLIDE_LEAD_S` in `aura/core/desktop.py` (both default to 10 ms).
 
+Widget follow and the confirm cooldown live on `HeadWidgets` in `aura/hud/head_widgets.py`:
+
+```python
+HeadWidgets(
+    select_cooldown_s=0.70,  # ignore another point this soon after a toggle
+    follow_s=0.09,           # how quickly the stack catches the head
+)
+```
+
 Blink, head-gesture, hand-gesture, and desktop click/drag thresholds are tunable on the classes in `aura/core/`.
 
 ## What you should see
 
-- **Left:** large live camera preview with optional overlays; Interaction Lab and Desktop Control strips appear under the camera when enabled
+- **Left:** large live camera preview with optional overlays. With **Widgets** on, Clock, Date, and Counter sit beside the head. Interaction Lab and Desktop Control strips appear under the camera when enabled
 - **Right (compact rail):** head metrics, head-gesture panel, eye tracking, movement axes, hand-gesture panel
 - Header: tracking status, latest head/eye gesture, FPS
 
@@ -168,7 +195,7 @@ Blink, head-gesture, hand-gesture, and desktop click/drag thresholds are tunable
 - This is **head pose**, not eye gaze. Rotation estimates are approximate.
 - Position values are relative image-space measures, not centimeters.
 - Hand LEFT / RIGHT labels are anatomical and corrected for the mirrored preview.
-- Hand tracking is optional — leave Hands-related modes off when you want maximum face-tracking FPS.
+- Hand tracking is optional — leave Hands-related modes, including **Widgets**, off when you want maximum face-tracking FPS.
 - Desktop Control does not send commands to TARS yet; it only consumes the same interaction events the HUD uses.
 
 ## Project layout
@@ -184,14 +211,15 @@ aura/core/interaction.py        # Adaptive fingertip cursor + fist events for HU
 aura/core/pose.py               # Angle wrap / pose helpers
 aura/core/visuals.py            # Older OpenCV drawing helpers (unused by HUD)
 aura/core/model.py              # Optional Face Landmarker downloader (unused by HUD)
+aura/hud/head_widgets.py        # Head-anchored Clock / Date / Counter
 aura/hud/lab.py                 # Interaction Lab canvas
 aura/hud/desktop_panel.py       # Desktop Control status / sensitivity strip
-tests/                          # Blink, head gesture, hand gesture, lab, desktop tests
+tests/                          # Blink, head gesture, hand gesture, widgets, lab, desktop tests
 start_windows.bat               # Windows one-click setup + launch
 requirements.txt
 ```
 
-Live path: `main.py` → Face Mesh (+ shared Hands when needed) → blink / pose / gestures / interaction events → Tkinter HUD (and optional Windows mouse).
+Live path: `main.py` → Face Mesh (+ shared Hands when needed) → blink / pose / gestures / head widgets / interaction events → Tkinter HUD (and optional Windows mouse).
 
 ## Tests
 
@@ -199,14 +227,16 @@ Live path: `main.py` → Face Mesh (+ shared Hands when needed) → blink / pose
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-Tests cover blink classification, head gestures, hand poses, pinch hysteresis, Interaction Lab events, fingertip follow (a fast move stays with the finger, resting jitter is rejected), and Desktop Control click/drag/safety plus cursor glide. Desktop tests use a fake mouse and do not move the real cursor.
+Tests cover blink classification, head gestures (including nod up versus nod down), hand poses, pinch hysteresis, head widgets (nods only move focus, a confirmed point toggles, a held point does not), Interaction Lab events, fingertip follow (a fast move stays with the finger, resting jitter is rejected), and Desktop Control click/drag/safety plus cursor glide. Desktop tests use a fake mouse and do not move the real cursor.
 
 ## Troubleshooting
 
 - **Camera not found / CAMERA ERROR:** Close Zoom, Teams, or other webcam apps. Check Windows Settings → Privacy & security → Camera. Try a different `CAMERA_INDEX` in `main.py`.
 - **Black or frozen preview:** Unplug/replug the camera, lower `CAMERA_WIDTH` / `CAMERA_HEIGHT`, or try another index.
 - **Low FPS (~15 or below):** Lower camera resolution, disable Hands-related modes when you do not need them, close other webcam apps, and use good lighting.
-- **Hands not appearing:** Enable **Hand Tracking**, **Gesture Recognition**, **Interaction Lab**, or **Desktop Control**, and keep hands clearly in frame with decent light.
+- **Hands not appearing:** Enable **Hand Tracking**, **Gesture Recognition**, **Widgets**, **Interaction Lab**, or **Desktop Control**, and keep hands clearly in frame with decent light.
+- **Widget highlight will not move:** Calibrate neutral, then nod clearly down or up and return to center. A small head shift is not a nod.
+- **Pointing does not toggle a widget:** Extend only the index finger and curl the others, hold it briefly so the pose can confirm, then drop the hand. Holding the point, or pointing again inside about 0.7 seconds, will not toggle a second time. Blinks do not select widgets.
 - **Fist not grabbing in the lab / desktop:** Close all four fingers. Aim with a pointed index first, then fist; the cursor stays on the aim point instead of jumping to the knuckles.
 - **Pinch not showing in the gesture panel:** Bring thumb and index close (a pad pinch still counts). A tight fist is classified as FIST, not PINCH.
 - **Desktop cursor fighting the mouse:** Press **Esc**, or wait for the hand to leave the frame. Desktop Control must be enabled explicitly each session.
