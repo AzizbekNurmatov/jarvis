@@ -1,6 +1,6 @@
 # AURA — Spatial Tracking HUD
 
-A webcam desktop app for **head pose**, **blink / wink detection**, **hand gesture recognition**, **head-anchored widgets**, an **Interaction Lab**, and optional **Windows desktop control**. Built with MediaPipe, OpenCV, and a Tkinter HUD.
+A webcam desktop app for **head pose**, **blink / wink detection**, **hand gesture recognition**, **head-anchored widgets**, **image-plane target selection**, an **Interaction Lab**, and optional **Windows desktop control**. Built with MediaPipe, OpenCV, and a Tkinter HUD.
 
 ## Features
 
@@ -8,7 +8,7 @@ A webcam desktop app for **head pose**, **blink / wink detection**, **hand gestu
 - Head rotation (yaw / pitch / roll) and relative position (X / Y / Z)
 - Neutral calibration with wrap-aware angle smoothing
 - Eye blink / wink detection with left / right openness meters
-- Toggleable eye-socket bounds on the camera feed
+- Camera overlays start off. Face mesh, pose axes, and eye-socket bounds stay hidden until you check them
 - One-shot head / eye gestures: winks, blink, double blink, nod, shake, turn left / right
 - Optional MediaPipe Hands overlay (21 landmarks + skeleton, up to two hands)
 - Rule-based hand gestures: open palm, fist, pointing, peace sign, pinch
@@ -16,6 +16,7 @@ A webcam desktop app for **head pose**, **blink / wink detection**, **hand gestu
 - Desktop Control (off by default): move / click / drag the Windows cursor with your hand
 - Pointer follow that stays steady when the hand is still and stays with the finger when you move, including a glide between camera frames on Windows
 - Head-anchored widgets (off by default): Clock, Date, and Counter sit beside the face, follow the head, and are driven by nods plus a pointing pose
+- Target selection (off by default): draw up to three named regions on the preview, point until the aim locks, then pinch to confirm. This is 2D image aim, not 3D pointing, and the selection is only reported — nothing is executed
 - Compact dark dashboard with FPS and live gesture status in the header
 
 ## Requirements
@@ -57,17 +58,20 @@ python3.11 -m venv .venv
 | --- | --- |
 | **Calibrate Neutral** | Zero rotation / position from your current pose; resets blink baselines and head-gesture state |
 | **Face Mesh** | Toggle face landmark dots on the preview |
-| **Pose Axes** | Toggle orientation guides from the nose |
-| **Eye Tracking** | Toggle eyelid / eye-socket bounds on the preview (blink detection still runs either way) |
+| **Pose Axes** | Toggle orientation guides from the nose (off at startup) |
+| **Eye Tracking** | Toggle eyelid / eye-socket bounds on the preview (off at startup; blink detection still runs either way) |
 | **Hand Tracking** | Toggle the hand skeleton overlay |
 | **Gesture Recognition** | Toggle the hand-gesture HUD panel and camera labels |
 | **Widgets** | Show Clock, Date, and Counter beside the head (off by default) |
+| **Targets** | Draw named regions on the preview and select one by pointing, then pinching (off by default) |
 | **Interaction Lab** | Show the fist-driven lab canvas under the camera |
 | **Desktop Control** | Move the Windows cursor with your index finger (off by default) |
 
 Close the window to quit. The app releases the camera, any hand model, and a held mouse button on exit.
 
-Hand detection runs once and is shared. It starts when **Hand Tracking**, **Gesture Recognition**, **Widgets**, **Interaction Lab**, or **Desktop Control** is on, and stops when all of those are off.
+Hand detection runs once and is shared. It starts when **Hand Tracking**, **Gesture Recognition**, **Widgets**, **Targets**, **Interaction Lab**, or **Desktop Control** is on, and stops when all of those are off.
+
+Every camera overlay checkbox starts unchecked, including **Pose Axes** and **Eye Tracking**. The preview stays clear until you turn one on.
 
 ### Head / eye gestures
 
@@ -96,7 +100,7 @@ Enable **Gesture Recognition**. Poses are classified from the existing 21 hand l
 | Peace sign | Index and middle extended, ring and pinky curled |
 | Pinch | Thumb near the index tip or last index joint |
 
-Unmatched poses show `UNKNOWN`. No hand shows `NO HAND`. Left and right hands are tracked separately. Pinch is still classified in the HUD; **Interaction Lab** and **Desktop Control** grab with a **fist**. **Widgets** confirm with **pointing**, not a blink.
+Unmatched poses show `UNKNOWN`. No hand shows `NO HAND`. Left and right hands are tracked separately. Pinch is still classified in the HUD; **Interaction Lab** and **Desktop Control** grab with a **fist**. **Widgets** confirm with **pointing**, not a blink. **Targets** confirms with a **pinch** after the point has locked.
 
 ### Head widgets
 
@@ -114,6 +118,8 @@ Click **Widgets**. Three compact chips appear beside the face, on the side of th
 
 Calibrate neutral first so nods line up with your resting pose. Positive pitch is treated as a nod down.
 
+While **Targets** is on, a point aims at a region and does not also toggle a widget. Nods still move the widget highlight.
+
 ### Interaction Lab
 
 Click **Interaction Lab** (the button turns green). An index-finger cursor appears on the lab canvas. The same adaptive follow used by Desktop Control drives it: a resting fingertip stays steady, and a deliberate move stays with the finger instead of trailing it.
@@ -123,6 +129,21 @@ Click **Interaction Lab** (the button turns green). An index-finger cursor appea
 - **LEVEL** — fist the slider and drag sideways
 
 You do not need the Hand Tracking or Gesture Recognition checkboxes for the lab. Turning **Hand Tracking** on is useful so you can see the skeleton while aiming.
+
+### Targets
+
+**Off by default.** Click **Targets** (the button turns purple). This selects a region in the camera image. It does not detect objects and it does not send a command.
+
+The preview is already mirrored, and the regions you draw live in that same image. A hit means the index finger’s on-screen direction crosses a rectangle. The overlay is labeled **2D IMAGE AIM**. There is no depth, so this is not a 3D point into the room.
+
+1. Type a name, or leave it blank to get `Target 1`, `Target 2`, or `Target 3`.
+2. Drag a box on the preview. Up to three regions. **Clear** removes them.
+3. Point at one region until the outline locks (about 0.4 seconds of a stable point).
+4. Pinch to confirm. The box turns green. The strip shows **AIM**, **STATE**, and **LAST**.
+
+A pinch before the aim locks does nothing. If the finger line meets two regions at once, the state stays **AMBIGUOUS** and nothing is selected. If the hand leaves the frame, the current aim drops and the last confirmation remains. Another pinch within about 0.85 seconds is ignored.
+
+The result is a `TargetSelection` (`mode` is `image_plane_2d`). Nothing in this step runs an action, so a later TARS layer can read the same event.
 
 ### Desktop Control
 
@@ -182,11 +203,20 @@ HeadWidgets(
 )
 ```
 
+Target aim timing lives on `TargetSelector` in `aura/core/targets.py`:
+
+```python
+TargetSelector(
+    stable_s=0.40,             # how long a point must hold before it locks
+    confirm_cooldown_s=0.85,   # ignore another pinch this soon after a selection
+)
+```
+
 Blink, head-gesture, hand-gesture, and desktop click/drag thresholds are tunable on the classes in `aura/core/`.
 
 ## What you should see
 
-- **Left:** large live camera preview with optional overlays. With **Widgets** on, Clock, Date, and Counter sit beside the head. Interaction Lab and Desktop Control strips appear under the camera when enabled
+- **Left:** large live camera preview. Overlays are off until you enable them. With **Widgets** on, Clock, Date, and Counter sit beside the head. With **Targets** on, named regions and a 2D aim line appear on the preview. Interaction Lab, Targets, and Desktop Control strips appear under the camera when enabled
 - **Right (compact rail):** head metrics, head-gesture panel, eye tracking, movement axes, hand-gesture panel
 - Header: tracking status, latest head/eye gesture, FPS
 
@@ -195,8 +225,8 @@ Blink, head-gesture, hand-gesture, and desktop click/drag thresholds are tunable
 - This is **head pose**, not eye gaze. Rotation estimates are approximate.
 - Position values are relative image-space measures, not centimeters.
 - Hand LEFT / RIGHT labels are anatomical and corrected for the mirrored preview.
-- Hand tracking is optional — leave Hands-related modes, including **Widgets**, off when you want maximum face-tracking FPS.
-- Desktop Control does not send commands to TARS yet; it only consumes the same interaction events the HUD uses.
+- Hand tracking is optional — leave Hands-related modes, including **Widgets** and **Targets**, off when you want maximum face-tracking FPS.
+- Desktop Control and Targets do not send commands to TARS yet. Each one only reports an event the HUD already uses.
 
 ## Project layout
 
@@ -208,18 +238,21 @@ aura/core/gesture_engine.py     # One-shot head + blink gestures
 aura/core/hand_gestures.py      # Rule-based hand pose classification + pinch
 aura/core/hand_tracking.py      # Optional MediaPipe Hands overlay
 aura/core/interaction.py        # Adaptive fingertip cursor + fist events for HUD / OS / TARS
+aura/core/targets.py            # 2D region aim + pinch selection (no action)
 aura/core/pose.py               # Angle wrap / pose helpers
 aura/core/visuals.py            # Older OpenCV drawing helpers (unused by HUD)
 aura/core/model.py              # Optional Face Landmarker downloader (unused by HUD)
 aura/hud/head_widgets.py        # Head-anchored Clock / Date / Counter
+aura/hud/target_overlay.py      # Region boxes and the 2D aim line on the preview
+aura/hud/target_panel.py        # Targets status strip (aim / state / last)
 aura/hud/lab.py                 # Interaction Lab canvas
 aura/hud/desktop_panel.py       # Desktop Control status / sensitivity strip
-tests/                          # Blink, head gesture, hand gesture, widgets, lab, desktop tests
+tests/                          # Blink, head gesture, hand gesture, widgets, targets, lab, desktop tests
 start_windows.bat               # Windows one-click setup + launch
 requirements.txt
 ```
 
-Live path: `main.py` → Face Mesh (+ shared Hands when needed) → blink / pose / gestures / head widgets / interaction events → Tkinter HUD (and optional Windows mouse).
+Live path: `main.py` → Face Mesh (+ shared Hands when needed) → blink / pose / gestures / head widgets / target selection / interaction events → Tkinter HUD (and optional Windows mouse).
 
 ## Tests
 
@@ -227,16 +260,18 @@ Live path: `main.py` → Face Mesh (+ shared Hands when needed) → blink / pose
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-Tests cover blink classification, head gestures (including nod up versus nod down), hand poses, pinch hysteresis, head widgets (nods only move focus, a confirmed point toggles, a held point does not), Interaction Lab events, fingertip follow (a fast move stays with the finger, resting jitter is rejected), and Desktop Control click/drag/safety plus cursor glide. Desktop tests use a fake mouse and do not move the real cursor.
+Tests cover blink classification, head gestures (including nod up versus nod down), hand poses, pinch hysteresis, head widgets (nods only move focus, a confirmed point toggles, a held point does not), target selection (a ray hits the region in front of the finger, overlap stays ambiguous, a stable point then a pinch confirms, an early pinch and a cooldown pinch do not), Interaction Lab events, fingertip follow (a fast move stays with the finger, resting jitter is rejected), and Desktop Control click/drag/safety plus cursor glide. Desktop tests use a fake mouse and do not move the real cursor. Target tests do not draw on the camera.
 
 ## Troubleshooting
 
 - **Camera not found / CAMERA ERROR:** Close Zoom, Teams, or other webcam apps. Check Windows Settings → Privacy & security → Camera. Try a different `CAMERA_INDEX` in `main.py`.
 - **Black or frozen preview:** Unplug/replug the camera, lower `CAMERA_WIDTH` / `CAMERA_HEIGHT`, or try another index.
 - **Low FPS (~15 or below):** Lower camera resolution, disable Hands-related modes when you do not need them, close other webcam apps, and use good lighting.
-- **Hands not appearing:** Enable **Hand Tracking**, **Gesture Recognition**, **Widgets**, **Interaction Lab**, or **Desktop Control**, and keep hands clearly in frame with decent light.
+- **Hands not appearing:** Enable **Hand Tracking**, **Gesture Recognition**, **Widgets**, **Targets**, **Interaction Lab**, or **Desktop Control**, and keep hands clearly in frame with decent light.
+- **Pose axes or eye outlines are gone at launch:** That is the startup default. Check **Pose Axes** or **Eye Tracking** to draw them again. Blinks still register with Eye Tracking off.
 - **Widget highlight will not move:** Calibrate neutral, then nod clearly down or up and return to center. A small head shift is not a nod.
-- **Pointing does not toggle a widget:** Extend only the index finger and curl the others, hold it briefly so the pose can confirm, then drop the hand. Holding the point, or pointing again inside about 0.7 seconds, will not toggle a second time. Blinks do not select widgets.
+- **Pointing does not toggle a widget:** Extend only the index finger and curl the others, hold it briefly so the pose can confirm, then drop the hand. Holding the point, or pointing again inside about 0.7 seconds, will not toggle a second time. Blinks do not select widgets. Turn **Targets** off if you want pointing to toggle widgets again.
+- **Target will not lock or confirm:** Drag a box that is clearly larger than a few percent of the frame, then hold a point on it until the outline locks before you pinch. A pinch aimed between two overlapping boxes stays ambiguous. If the hand drops out, point again; the last confirmed name is kept.
 - **Fist not grabbing in the lab / desktop:** Close all four fingers. Aim with a pointed index first, then fist; the cursor stays on the aim point instead of jumping to the knuckles.
 - **Pinch not showing in the gesture panel:** Bring thumb and index close (a pad pinch still counts). A tight fist is classified as FIST, not PINCH.
 - **Desktop cursor fighting the mouse:** Press **Esc**, or wait for the hand to leave the frame. Desktop Control must be enabled explicitly each session.
