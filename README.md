@@ -1,7 +1,8 @@
 # AURA — Spatial Tracking HUD
 
 A webcam desktop app for **head pose**, **blink / wink detection**, **hand gesture recognition**, **head-anchored widgets**, **image-plane target selection**, an **Interaction Lab**, and optional **Windows desktop control**. Built with MediaPipe, OpenCV, and a Tkinter HUD.
-## commit for the day
+## need to redo ui redesign 
+
 ## Features
 
 - Live mirrored camera preview (fills the main panel)
